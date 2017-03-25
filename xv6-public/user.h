@@ -20,9 +20,11 @@ int mkdir(char*);
 int chdir(char*);
 int dup(int);
 int getpid(void);
+int getppid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+int my_syscall(char*);
 
 // ulib.c
 int stat(char*, struct stat*);
