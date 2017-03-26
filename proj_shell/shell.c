@@ -1,35 +1,44 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
-#define MAX 500
+#include <unistd.h>
+#define MAX 100
 
-int ColonSearch(char oper[MAX]);
-void Parse(char *oper, char **oper_list); 
+int Parse(char oper[], char oper_list[][MAX]); 
+void Execute(char oper[]);
 
 int main(int argc, char *argv[]){
-    char oper[MAX] = {0};
-    int col_num,i;
-    char *oper_list[MAX];
+    char oper[MAX];
+    char oper_list[MAX][MAX];
+    int oper_num,i;
+
+    Initialize(oper, oper_list);
 
     if(argc == 1) {
         while (1) { 
             printf("prompt> ");
             fgets(oper, MAX, stdin);
-            col_num = ColonSearch(oper);
-
-            if(col_num == 0){
-                system(oper);
-             //1 Line 1 Command
-            } else{
-               Parse(oper, oper_list);
-               // for(i = 0; oper_list[i] != NULL; i++){
-               //     printf("%s\n", oper_list[i]);   
-               // }
-            }//1 Line many Commands
+            //quit check
+            oper_num = Parse(oper, oper_list);
+            printf("%d", oper_num);
+           // for (i=0; i < oper_num; i++) {
+           //     Execute(oper_list[i]);
+           // }
         }
      //Interactive mode
     } else if(argc == 2) {
-
-        exit(1);
+        FILE *fp;
+        
+        while (1) {
+            fp = fopen(argv[1],"rt");
+            fgets(oper, MAX, fp);
+            printf("%s\n", oper);
+            //quit check
+            oper_num = Parse(oper, oper_list);
+            for (i=0; i< oper_num; i++) {
+                Execute(oper_list[i]);
+            }
+        }
      //Batch mode
     } else {
         printf("Input Error!\n"); 
@@ -38,26 +47,31 @@ int main(int argc, char *argv[]){
 
     return 0;
 }
-int ColonSearch(char oper[MAX]){
-    int i,count=0;
-
-    for(i=0;i<MAX;i++){
-        if(oper[i] == ';'){
-            count++;
-        } else if(oper[i] == '\0'){
-           break;
-        }
-    }
-    return count;
-}
-void Parse(char *oper, char **oper_list){
+int Parse(char oper[], char oper_list[][MAX]){
     char *token;
+    int i = 0;
 
-    token = strtok(oper, ';');
+    token = strtok(oper, ";");
     while (token != NULL) {
-        printf("%s", token);
-        *(oper_list++) = token;
-        token = strtok(NULL, ';');
+        strcmp(oper_list[i++],token);
+        token = strtok(NULL, ";");
     }
-    *oper_list = NULL;
+    for(i=0;oper_list[i]!="\0";i++){
+        printf("%s",oper_list[i]);
+    }
+    
+    return i;
+}
+void Execute(char oper[]){
+    int pid;
+    char *vector[MAX];
+
+    pid = fork();
+    if (pid == -1) {
+        printf("Fork Error!\n");
+    } else if(pid == 0){
+  //      execvp(oper_list,oper_list);
+    } else{
+        wait();
+    }
 }
