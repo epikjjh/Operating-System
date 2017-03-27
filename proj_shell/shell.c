@@ -7,67 +7,100 @@
 #define MAX 100
 
 
-int Parse(char oper[], char oper_list[][MAX]); 
-void Execute(char oper[]);
+int Parse(char oper[], char *oper_list[MAX], char *delimeter); 
+int Execute(char oper[]);
+int QuitCheck(char **vector);
 
 int main(int argc, char *argv[]){
     char oper[MAX];
-    char oper_list[MAX][MAX];
-    int oper_num,i;
+    char *oper_list[MAX];
+    int oper_num,i,exit = 0;
 
     if(argc == 1) {
         while (1) { 
             printf("prompt> ");
             fgets(oper, MAX, stdin);
+            if(strcmp(oper, "\n") == 0) {
+                continue;
+            }
             //quit check
-            oper_num = Parse(oper, oper_list);
+            oper_list[0] = strtok(oper, "\n");
+            strcpy(oper, oper_list[0]);
+            oper_num = Parse(oper, oper_list, ";");
             for (i=0; i < oper_num; i++) {
-                Execute(oper_list[i]);
+                if(Execute(oper_list[i]) < 0){
+                    exit = -1;
+                    break;
+                }
+            }
+            if(exit < 0){
+                break;
             }
         }
      //Interactive mode
     } else if(argc == 2) {
         FILE *fp;
-        
-        while (1) {
-            fp = fopen(argv[1],"rt");
+ 
+        fp = fopen(argv[1],"rt");
+        while (!feof(fp)) {
             fgets(oper, MAX, fp);
-            printf("%s\n", oper);
+            fprintf(stdout, "%s", oper);
+            if(strcmp(oper, "\n") == 0) {
+                continue;
+            }
             //quit check
-            oper_num = Parse(oper, oper_list);
-            for (i=0; i< oper_num; i++) {
+            oper_list[0] = strtok(oper, "\n");
+            strcpy(oper, oper_list[0]);
+            oper_num = Parse(oper, oper_list, ";");
+            for (i=0; i < oper_num; i++) {
                 Execute(oper_list[i]);
             }
         }
+        fclose(fp);
      //Batch mode
     } else {
         printf("Input Error!\n"); 
-        exit(-1);
+        return -1;
     }//Error case
 
     return 0;
 }
-int Parse(char oper[], char oper_list[][MAX]){
-    char *token;
+int Parse(char oper[], char *oper_list[MAX], char *delimeter){
     int i = 0;
+    char *token;
 
-    token = strtok(oper, ";");
-    while (token != NULL) {
-        strcpy(oper_list[i++], token);
-        token = strtok(NULL, ";");
+    token = strtok(oper, delimeter);
+    if(token != NULL){
+        while(token != NULL){
+            oper_list[i++] = token;
+            token = strtok(NULL, delimeter);
+        }
+    } else if(oper_list[i] == NULL){
+        return 0;
     }
-    
+        
     return i;
 }
-void Execute(char oper[]){
-    int pid, status, i=0;
+int QuitCheck(char **vector){
+    int i=0;
+
+    while(vector[i] != NULL){
+        if(strstr(vector[i], "quit") != NULL){
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+int Execute(char oper[]){
+    int pid, i, status;
     char *vector[MAX];
 
-    vector[i] = strtok(oper, " ");
-    if(vector[i] != NULL){
-        i++;
-        while((vector[i++] = strtok(NULL, " ")) != NULL);
-        vector[i] = NULL;
+    i = Parse(oper, vector, " ");
+    vector[i] = NULL;
+
+    if(QuitCheck(vector)){
+        return -1;
     }
     pid = fork();
     if (pid == -1) {
@@ -77,4 +110,6 @@ void Execute(char oper[]){
     } else{
         waitpid(pid, &status, 0);
     }
+
+    return 0;
 }
