@@ -7,7 +7,7 @@
 #define MAX 100
 
 
-int Parse(char oper[], char *oper_list[MAX], char *delimeter); 
+int Parse(char oper[], char **oper_list, char *delimeter); 
 int Execute(char oper[]);
 int QuitCheck(char **vector);
 
@@ -16,14 +16,41 @@ int main(int argc, char *argv[]){
     char *oper_list[MAX];
     int oper_num,i,exit = 0;
 
-    if(argc == 1) {
-        while (1) { 
+    if (argc == 1) {
+        while (01) { 
             printf("prompt> ");
-            fgets(oper, MAX, stdin);
+            if (fgets(oper, MAX, stdin) == NULL){
+                break;
+            } else if (oper[0] == '\n') {
+                continue;
+            } else {
+                oper_list[0] = strtok(oper, "\n");
+                strcpy(oper, oper_list[0]);
+                oper_num = Parse(oper, oper_list, ";");
+                for (i=0; i < oper_num; i++) {
+                    if(Execute(oper_list[i]) < 0){
+                        exit = -1;
+                        break;
+                    }
+                }
+                if(exit < 0){
+                    break;
+                 }
+            }
+        }
+     //Interactive mode
+    } else if(argc == 2) {
+        FILE *fp;
+ 
+        fp = fopen(argv[1],"rt");
+        while (!feof(fp)) {
+            if(fgets(oper, MAX, fp) == NULL){
+                break;
+            }
+            fprintf(stdout, "%s", oper);
             if(strcmp(oper, "\n") == 0) {
                 continue;
             }
-            //quit check
             oper_list[0] = strtok(oper, "\n");
             strcpy(oper, oper_list[0]);
             oper_num = Parse(oper, oper_list, ";");
@@ -37,25 +64,6 @@ int main(int argc, char *argv[]){
                 break;
             }
         }
-     //Interactive mode
-    } else if(argc == 2) {
-        FILE *fp;
- 
-        fp = fopen(argv[1],"rt");
-        while (!feof(fp)) {
-            fgets(oper, MAX, fp);
-            fprintf(stdout, "%s", oper);
-            if(strcmp(oper, "\n") == 0) {
-                continue;
-            }
-            //quit check
-            oper_list[0] = strtok(oper, "\n");
-            strcpy(oper, oper_list[0]);
-            oper_num = Parse(oper, oper_list, ";");
-            for (i=0; i < oper_num; i++) {
-                Execute(oper_list[i]);
-            }
-        }
         fclose(fp);
      //Batch mode
     } else {
@@ -65,7 +73,7 @@ int main(int argc, char *argv[]){
 
     return 0;
 }
-int Parse(char oper[], char *oper_list[MAX], char *delimeter){
+int Parse(char oper[], char **oper_list, char *delimeter){
     int i = 0;
     char *token;
 
