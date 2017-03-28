@@ -57,24 +57,50 @@ int main(int argc, char *argv[]){
 
             } else {
                 Initialize(oper_list);
+                //Initialize oper_list
+
                 oper_list[0] = strtok(oper, "\n");
+                //Erase '\n'. This is cause of proper operation
+
                 strcpy(oper, oper_list[0]);
+                //Store the operation(Removing "\n")
+
                 oper_num = Parse(oper, oper_list, ";");
+                /*Slicing operation with ";", and store them in the oper_list.
+                  Then store the operation number in oper_num*/
+
                 pid = (int*)calloc(oper_num,sizeof(int));
+                //Array of pid : memory allocation
+
                 exit = QuitCheck(oper_list);
+                //Check whether operation has "quit" statement
+
                 for (i=0; i < oper_num; i++) {
                     pid[i] = fork();
                     if (pid[i] == -1) {
                         printf("Fork Error!\n");
+                        //In case of fork failed
+
                     } else if(pid[i] == 0){
                         Execute(oper_list[i]);
+                        //In case of child process
+
                     } else{
                         waitpid(pid[i],&status,0);
+                        //In case of parent process
                     }
                 }
+                /*This loop is for executing operations. First do fork,
+                  then execute operation in the child process.
+                  Parent process will be waiting child process.*/
+
                 if(exit == 1){
                     break;
                 }
+                /*In former progression, we check whether operation has "quit" statement.
+                  If so, break the loop and terminate the program.
+                  The reason why I terminate in this progress is for the intermixed situation.
+                  ex) ls; quit; pwd*/
                 free(pid);
                 //Free the dynamically allocated memory.
 
@@ -88,41 +114,80 @@ int main(int argc, char *argv[]){
         FILE *fp;
  
         fp = fopen(argv[1],"rt");
+        //File pointer allocating
+
         while (!feof(fp)) {
             if(fgets(oper, MAX, fp) == NULL){
                 break;
             }
+            /*In case of user input being Ctrl + D : Terminate the program.*/
+
             fprintf(stdout, "%s", oper);
+            //Print the operation in the batchfile(by line)
+
             if(oper[0] == '\n') {
                 continue;
             }
+            /*In case of user input being Enter : Wait new input.*/
+
             Initialize(oper_list);
+            //Initialize oper_list
+
             oper_list[0] = strtok(oper, "\n");
+            //Erase '\n'. This is cause of proper operation
+
             strcpy(oper, oper_list[0]);
+            //Store the operation(Removing "\n")
+
             oper_num = Parse(oper, oper_list, ";");
+            /*Slicing operation with ";", and store them in the oper_list.
+              Then store the operation number in oper_num*/
+
             pid = (int*)calloc(oper_num,sizeof(int));
+            //Array of pid : memory allocation
+
             exit = QuitCheck(oper_list);
+            //Check whether operation has "quit" statement
+
             for (i=0; i < oper_num; i++) {
                 pid[i] = fork();
                 if (pid[i] == -1) {
                     printf("Fork Error!\n");
+                    //In case of fork failed
+
                 } else if(pid[i] == 0){
                     Execute(oper_list[i]);
+                    //In case of child process
+
                 } else{
                     waitpid(pid[i], &status, 0);
+                    //In case of parent process
+
                 }
             }
+            /*This loop is for executing operations. First do fork,
+              then execute operation in the child process.
+              Parent process will be waiting child process.*/
+
             if(exit == 1){
                 break;
             }   
+            /*In former progression, we check whether operation has "quit" statement.
+              If so, break the loop and terminate the program.
+              The reason why I terminate in this progress is for the intermixed situation.
+              ex) ls; quit; pwd*/
+
             free(pid);
+            //Free the dynamically allocated memory.
         }
         fclose(fp);
+        //Close the file pointer
+
      //Batch mode
     } else {
         printf("Input Error!\n"); 
         return -1;
-    }//Error case
+    }//Error case : print error message
 
     return 0;
 }
@@ -131,6 +196,7 @@ void Initialize(char**oper_list){
 
     for(i=0;i<MAX;i++){
         oper_list[i] = NULL;
+        //Initialize by NULL in loop statement
     }
 }
 int Parse(char oper[], char **oper_list, char *delimeter){
@@ -146,6 +212,8 @@ int Parse(char oper[], char **oper_list, char *delimeter){
     } else if(oper_list[i] == NULL){
         return 0;
     }
+    /*While strtok returns sliced string(Terminate when it returns NULL),
+      store the string in the oper_list*/
         
     return i;
 }
@@ -158,6 +226,9 @@ int QuitCheck(char **vector){
         }
         i++;
     }
+    /*Until the end of operations(When it comes to return NULL.
+      This is beacuse I've initialized vector in former progress),
+      find the operations has "quit" statement by using strstr function */
     return 0;
 }
 void Execute(char oper[]){
@@ -168,4 +239,7 @@ void Execute(char oper[]){
     vector[i] = NULL;
 
     execvp(vector[0],vector);
+    /*First, parse the given operation(This is because of proper execution.
+      execvp doesn't accept operation with space(" ")).
+      Then execute operation by using execvp function.*/
 }
