@@ -41,12 +41,21 @@ sys_getpid(void)
 {
   return proc->pid;
 }
+
 int
 sys_getppid(void)
 {
   return proc->parent->pid;
 }
 //This function is used to return parent's pid
+
+int
+sys_yield(void)
+{
+    yield();
+    return 0;
+}
+
 int
 sys_sbrk(void)
 {
