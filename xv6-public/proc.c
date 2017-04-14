@@ -20,6 +20,16 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+static struct proc *queue[3][NPROC];
+//This queues are for the MLFQ priority queues.
+
+int boost_check = 0;
+//This variable is for checking whether it's priority boost time.
+
+int queue_pointer[3] = {0};
+//This variavle is for checking how much processes are in each queue.
+//It's initialzed at declaration time.
+
 void
 pinit(void)
 {
@@ -72,6 +82,11 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
+  p->priority = 1;
+  // Priority level starts from 1. 1 is the Highest level, 3 is the lowest level.
+  p->ticks = 0;
+  // Initilaize ticks. It'll be used to record use of each process's time slices.
+  queue[0][] = p;
 
   return p;
 }
