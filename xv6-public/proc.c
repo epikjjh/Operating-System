@@ -20,15 +20,26 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
-static struct proc *queue[3][NPROC];
+struct {
+    struct proc *queue[3][NPROC];
+    struct spinlock lock;
+} qtable
 //This queues are for the MLFQ priority queues.
 
 int boost_check = 0;
-//This variable is for checking whether it's priority boost time.
+//This variable is for checking whether it's priority boost time. Actually it's total ticks.
 
 int queue_pointer[3] = {0};
 //This variavle is for checking how much processes are in each queue.
 //It's initialzed at declaration time.
+
+int priority_check(void);
+
+void priority_manage(struct proc *p, int level);
+
+void priority_boost(void);
+
+void queue_move(void);
 
 void
 pinit(void)
@@ -50,7 +61,8 @@ allocproc(void)
   acquire(&ptable.lock);
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == UNUSED)
+    if(p->state == UNUSED && queue_pointer[0] != NPROC)
+        // Execption handling : When highest queue is full.
       goto found;
 
   release(&ptable.lock);
@@ -84,9 +96,13 @@ found:
   p->context->eip = (uint)forkret;
   p->priority = 1;
   // Priority level starts from 1. 1 is the Highest level, 3 is the lowest level.
+ 
   p->ticks = 0;
   // Initilaize ticks. It'll be used to record use of each process's time slices.
-  queue[0][] = p;
+  
+  qtable.queue[0][queue_pointer[0]] = p;
+  queue_pointer[0]++;
+  // Insert process in to highest queue.
 
   return p;
 }
@@ -295,11 +311,13 @@ void
 scheduler(void)
 {
   struct proc *p;
+  int pointer; 
 
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
+    /*
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
@@ -320,6 +338,28 @@ scheduler(void)
       proc = 0;
     }
     release(&ptable.lock);
+    */
+    acqurie(&qtable.lock);
+    pointer = priority_check();
+    for(p = qtable.queue[pointer]; p < &qtable.queue[pointer][NPROC]; p++){
+      if(p->state != RUNNABLE)
+        continue;
+
+      // Switch to chosen process.  It is the process's job
+      // to release ptable.lock and then reacquire it
+      // before jumping back to us.
+      priority_manage(p, pointer);
+      proc = p;
+      switchuvm(p);
+      p->state = RUNNING;
+      swtch(&cpu->scheduler, p->context);
+      switchkvm();
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      proc = 0;
+    }
+    release(&qtable.lock);
 
   }
 }
@@ -353,9 +393,16 @@ sched(void)
 void
 yield(void)
 {
+  boost_check++;
+  //Increase ticks.
+
   acquire(&ptable.lock);  //DOC: yieldlock
   proc->state = RUNNABLE;
   sched();
+  if(boost_check == 100){
+    priority_boost();
+    boost_check = 0;
+  }
   release(&ptable.lock);
 }
 
@@ -497,4 +544,62 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+//
+int
+priority_check(void)
+{
+    int i = 0;
+
+    while(queue_pointer[i] == 0){
+        i++;
+
+        if(i==3){
+            return 0;
+        }
+    }
+    
+    return i;
+}
+void
+priority_manage(struct proc *p, int level)
+{
+    p->ticks++;
+    
+    switch () {
+        case 0 :
+            if(p->ticks == 5){
+                p->priority++;        
+                p->ticks = 0;
+            }
+        break;
+
+        case 1 :
+            if(p->ticks == 10){
+                p->priority++;        
+                p->ticks = 0;
+            }
+        break;
+
+        case 2 :
+            if(p->ticks == 20){
+                p->ticks = 0;
+            }
+        break;
+    }
+}
+void
+priority_boost(void)
+{
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->state != RUNNABLE)
+        continue;
+      p->ticks = 0;
+      p->priority = 1;
+    }
+}
+void 
+queue_move(void)
+{
+
 }
