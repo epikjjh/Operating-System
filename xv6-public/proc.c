@@ -21,9 +21,9 @@ extern void trapret(void);
 static void wakeup1(void *chan);
 
 struct {
-    struct proc *queue[3][NPROC];
+    struct proc queue[3][NPROC];
     struct spinlock lock;
-} qtable
+} qtable;
 //This queues are for the MLFQ priority queues.
 
 int boost_check = 0;
@@ -100,7 +100,7 @@ found:
   p->ticks = 0;
   // Initilaize ticks. It'll be used to record use of each process's time slices.
   
-  qtable.queue[0][queue_pointer[0]] = p;
+  qtable.queue[0][queue_pointer[0]] = *p;
   queue_pointer[0]++;
   // Insert process in to highest queue.
 
@@ -339,7 +339,8 @@ scheduler(void)
     }
     release(&ptable.lock);
     */
-    acqurie(&qtable.lock);
+    acquire(&qtable.lock);
+    acquire(&ptable.lock);
     pointer = priority_check();
     for(p = qtable.queue[pointer]; p < &qtable.queue[pointer][NPROC]; p++){
       if(p->state != RUNNABLE)
@@ -360,7 +361,7 @@ scheduler(void)
       proc = 0;
     }
     release(&qtable.lock);
-
+    release(&ptable.lock);
   }
 }
 
@@ -566,7 +567,7 @@ priority_manage(struct proc *p, int level)
 {
     p->ticks++;
     
-    switch () {
+    switch (p->priority) {
         case 0 :
             if(p->ticks == 5){
                 p->priority++;        
@@ -587,19 +588,45 @@ priority_manage(struct proc *p, int level)
             }
         break;
     }
+
+    queue_move();
 }
 void
 priority_boost(void)
 {
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
-      p->ticks = 0;
-      p->priority = 1;
+    struct proc *p;
+    int i;
+
+    for(i = 0; i < 3; i++){
+        for(p = qtable.queue[i]; p < &qtable.queue[i][NPROC]; p++){
+            p->ticks = 0;
+            p->priority = 1;
+        }
     }
+    queue_move();
 }
 void 
 queue_move(void)
 {
+    struct proc *p;
+    int i,j,cleaner_pointer;
 
+    for(i = 0; i < 3; i++){
+        for(p = qtable.queue[i], cleaner_pointer = 0; p < &qtable.queue[i][NPROC]; p++, cleaner_pointer++){
+            if(p->priority > 0 && p->priority != i+1){
+                qtable.queue[(p->priority)-1][queue_pointer[(p->priority)-1]] = *p;
+                queue_pointer[(p->priority)-1]++;
+                //Insert in to new queue
+
+                for(j = cleaner_pointer; j < NPROC-1; j++){
+                    qtable.queue[(p->priority)-1][j] = qtable.queue[(p->priority)-1][j+1];
+                }
+                qtable.queue[(p->priority)-1][j].priority = -1;
+                //Dequeue
+
+                queue_pointer[i]--;
+                //Revise original queue_pointer
+            }
+        }
+    }
 }
