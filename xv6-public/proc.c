@@ -250,6 +250,9 @@ exit(void)
     }
   }
 
+  // Dequeue  
+  queue_move();
+
   // Jump into the scheduler, never to return.
   proc->state = ZOMBIE;
   sched();
@@ -621,11 +624,15 @@ queue_move(void)
                 for(j = cleaner_pointer; j < NPROC-1; j++){
                     qtable.queue[(p->priority)-1][j] = qtable.queue[(p->priority)-1][j+1];
                 }
-                qtable.queue[(p->priority)-1][j].priority = -1;
-                //Dequeue
-
                 queue_pointer[i]--;
                 //Revise original queue_pointer
+            }
+            else if(p->priority == -1){
+                for(j = cleaner_pointer; j< NPROC-1; j++){
+                    qtable.queue[(p->priority)-1][j] = qtable.queue[(p->priority)-1][j+1];
+                }
+                queue_pointer[i]--;
+                //Remove queue
             }
         }
     }
