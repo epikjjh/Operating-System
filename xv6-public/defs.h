@@ -115,7 +115,12 @@ void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
-void            yield(void);
+void            yield(void);            
+int             priority_check(void);
+void            priority_manage(struct proc *p);
+void            priority_boost(void);
+void            queue_move(void);
+int             getlev(void);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

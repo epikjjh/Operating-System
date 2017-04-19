@@ -20,10 +20,7 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
-struct {
-    struct proc queue[3][NPROC];
-    struct spinlock lock;
-} qtable;
+struct proc *queue[3][NPROC];
 //This queues are for the MLFQ priority queues.
 
 int boost_check = 0;
@@ -35,11 +32,13 @@ int queue_pointer[3] = {0};
 
 int priority_check(void);
 
-void priority_manage(struct proc *p, int level);
+void priority_manage(struct proc *p);
 
 void priority_boost(void);
 
 void queue_move(void);
+
+int getlev(void);
 
 void
 pinit(void)
@@ -61,7 +60,7 @@ allocproc(void)
   acquire(&ptable.lock);
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == UNUSED && queue_pointer[0] != NPROC)
+    if(p->state == UNUSED && queue_pointer[0] < NPROC)
         // Execption handling : When highest queue is full.
       goto found;
 
@@ -94,13 +93,13 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
-  p->priority = 1;
-  // Priority level starts from 1. 1 is the Highest level, 3 is the lowest level.
+  p->priority = 0;
+  // Priority level starts from 0. 0 is the Highest level, 2 is the lowest level.
  
   p->ticks = 0;
   // Initilaize ticks. It'll be used to record use of each process's time slices.
   
-  qtable.queue[0][queue_pointer[0]] = *p;
+  queue[0][queue_pointer[0]] = p;
   queue_pointer[0]++;
   // Insert process in to highest queue.
 
@@ -116,7 +115,6 @@ userinit(void)
   extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
-  
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
@@ -251,6 +249,7 @@ exit(void)
   }
 
   // Dequeue  
+  p->priority = -1;
   queue_move();
 
   // Jump into the scheduler, never to return.
@@ -314,12 +313,11 @@ void
 scheduler(void)
 {
   struct proc *p;
-  int pointer; 
+  int level,i; 
 
   for(;;){
     // Enable interrupts on this processor.
     sti();
-
     /*
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
@@ -342,17 +340,18 @@ scheduler(void)
     }
     release(&ptable.lock);
     */
-    acquire(&qtable.lock);
     acquire(&ptable.lock);
-    pointer = priority_check();
-    for(p = qtable.queue[pointer]; p < &qtable.queue[pointer][NPROC]; p++){
-      if(p->state != RUNNABLE)
+
+    level = priority_check();
+    for(p = queue[level][0], i=0; i < queue_pointer[level]; p = queue[level][++i]){
+      if(p->state != RUNNABLE){
         continue;
+      }
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
-      priority_manage(p, pointer);
+      priority_manage(p);
       proc = p;
       switchuvm(p);
       p->state = RUNNING;
@@ -363,7 +362,6 @@ scheduler(void)
       // It should have changed its p->state before coming back.
       proc = 0;
     }
-    release(&qtable.lock);
     release(&ptable.lock);
   }
 }
@@ -553,60 +551,59 @@ procdump(void)
 int
 priority_check(void)
 {
-    int i = 0;
+  int i = 0;
 
-    while(queue_pointer[i] == 0){
-        i++;
+  while(queue_pointer[i] == 0){
+    i++;
 
-        if(i==3){
-            return 0;
-        }
+    if(i == 3){
+      return 0;
     }
-    
-    return i;
+  }  
+  return i;
 }
 void
-priority_manage(struct proc *p, int level)
+priority_manage(struct proc *p)
 {
-    p->ticks++;
+  p->ticks++;
     
-    switch (p->priority) {
-        case 0 :
-            if(p->ticks == 5){
-                p->priority++;        
-                p->ticks = 0;
-            }
-        break;
+  switch (p->priority) {
+      case 0 :
+          if(p->ticks == 5){
+              p->priority++;        
+              p->ticks = 0;
+          }
+      break;
 
-        case 1 :
-            if(p->ticks == 10){
-                p->priority++;        
-                p->ticks = 0;
-            }
-        break;
+      case 1 :
+          if(p->ticks == 10){
+              p->priority++;        
+              p->ticks = 0;
+          }
+      break;
+ 
+      case 2 :
+          if(p->ticks == 20){
+              p->ticks = 0;
+          }
+      break;
+  }
 
-        case 2 :
-            if(p->ticks == 20){
-                p->ticks = 0;
-            }
-        break;
-    }
-
-    queue_move();
+  queue_move();
 }
 void
 priority_boost(void)
 {
-    struct proc *p;
-    int i;
+  struct proc *p;
+  int i,j;
 
-    for(i = 0; i < 3; i++){
-        for(p = qtable.queue[i]; p < &qtable.queue[i][NPROC]; p++){
-            p->ticks = 0;
-            p->priority = 1;
-        }
-    }
-    queue_move();
+  for(i = 0; i < 3; i++){
+      for(p = queue[i][0], j=0; j < queue_pointer[i]; p = queue[i][++j]){
+          p->ticks = 0;
+          p->priority = 0;
+      }
+  }
+  queue_move();
 }
 void 
 queue_move(void)
@@ -615,25 +612,30 @@ queue_move(void)
     int i,j,cleaner_pointer;
 
     for(i = 0; i < 3; i++){
-        for(p = qtable.queue[i], cleaner_pointer = 0; p < &qtable.queue[i][NPROC]; p++, cleaner_pointer++){
-            if(p->priority > 0 && p->priority != i+1){
-                qtable.queue[(p->priority)-1][queue_pointer[(p->priority)-1]] = *p;
+        for(p = queue[i][0], cleaner_pointer = 0; cleaner_pointer < queue_pointer[i]; p = queue[i][++cleaner_pointer]){
+            if(p->priority > 0 && p->priority != i){
+                queue[p->priority][queue_pointer[p->priority]] = p;
                 queue_pointer[(p->priority)-1]++;
                 //Insert in to new queue
 
-                for(j = cleaner_pointer; j < NPROC-1; j++){
-                    qtable.queue[(p->priority)-1][j] = qtable.queue[(p->priority)-1][j+1];
+                for(j = cleaner_pointer; j < queue_pointer[i]-1 ; j++){
+                    queue[i][j] = queue[i][j+1];
                 }
                 queue_pointer[i]--;
                 //Revise original queue_pointer
             }
             else if(p->priority == -1){
-                for(j = cleaner_pointer; j< NPROC-1; j++){
-                    qtable.queue[(p->priority)-1][j] = qtable.queue[(p->priority)-1][j+1];
+                for(j = cleaner_pointer; j < queue_pointer[i]-1; j++){
+                    queue[i][j] = queue[i][j+1];
                 }
                 queue_pointer[i]--;
                 //Remove queue
             }
-        }
+        }      
     }
+}
+int
+getlev(void)
+{
+    return proc->priority;
 }

@@ -180,6 +180,9 @@ UPROGS=\
     _getppid_user\
     _interrupt\
     _yield_user\
+    _test_master\
+    _test_mlfq\
+    _test_stride\
 
 fs.img: mkfs README $(UPROGS)
 	./mkfs fs.img README $(UPROGS)

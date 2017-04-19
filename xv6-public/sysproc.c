@@ -57,6 +57,12 @@ sys_yield(void)
 }
 
 int
+sys_getlev(void)
+{
+    return getlev();
+}
+
+int
 sys_sbrk(void)
 {
   int addr;
