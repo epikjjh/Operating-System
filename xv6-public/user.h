@@ -27,6 +27,7 @@ int uptime(void);
 int my_syscall(char*);
 int yield(void);
 int getlev(void);
+int set_cpu_share(int share);
 
 // ulib.c
 int stat(char*, struct stat*);
