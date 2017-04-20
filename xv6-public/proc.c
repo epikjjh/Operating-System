@@ -31,6 +31,8 @@ int index_pointer[3] = {0};
 
 int stride_pointer = 0;
 
+int total_share = 0;
+
 void priority_manage(struct proc *p);
 
 int getlev(void);
@@ -92,12 +94,9 @@ found:
   p->context->eip = (uint)forkret;
   p->priority = 0;
   // Priority level starts from 0. 0 is the Highest level, 2 is the lowest level.
- 
+  p->index = index_pointer[0]++; 
   p->ticks = 0;
   // Initilaize ticks. It'll be used to record use of each process's time slices.
- // cprintf("initial!: %d\n", p->pid);
- // queue[0][queue_pointer[0]] = p->pid;
- // queue_pointer[0]++;
   // Insert process in to highest queue.
 
   if(p->share > 0){
@@ -247,11 +246,9 @@ exit(void)
     }
   }
 
-  // Dequeue  
-//  queue_move(p->pid,p->priority);
-
   // Jump into the scheduler, never to return.
   proc->state = ZOMBIE;
+  index_pointer[proc->priority]--;
   sched();
   panic("zombie exit");
 }
@@ -311,10 +308,11 @@ void
 scheduler(void)
 {
   struct proc *p; 
-  int level;
+  int level, index;
 
   for(;;){
     level = 2;
+    index = NPROC;
     // Enable interrupts on this processor.
     sti();
 
@@ -324,17 +322,21 @@ scheduler(void)
             level = p->priority;
         }
     }
-
     release(&ptable.lock);
 
     acquire(&ptable.lock);
-    // level = priority_check();
-    for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
-    //    cprintf("s : %d, pr : %d\n", p->state, p->priority);
-        if(p->state != RUNNABLE || p->priority != level){
+    for(p=ptable.proc; p < &ptable.proc[NPROC];p++){
+        if(p->state == RUNNABLE && p->priority == level && p->index < index){
+            index = p->index;
+        }
+    }
+    release(&ptable.lock);
+
+    acquire(&ptable.lock);
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state != RUNNABLE || p->priority != level /*|| p->index != index*/){
             continue;
         }
-       // cprintf("s : %d, id : %d\n",p->state, p->pid);
         priority_manage(p);
         proc = p;
         switchuvm(p);
@@ -348,7 +350,23 @@ scheduler(void)
 
     boost_check++;
     if(boost_check == 100){
+        acquire(&ptable.lock);
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+            if(p->priority == 1){
+                p->index = index_pointer[0]++;
+                index_pointer[1]--;
+            }
+            else if(p->priority == 2){
+                p->index = index_pointer[0]++;
+                index_pointer[2]--;
+            }
+            p->priority = 0;
+            p->ticks = 0;
 
+        }
+        release(&ptable.lock);
+
+        boost_check = 0;   
     }
   }
 }
@@ -537,6 +555,8 @@ priority_manage(struct proc *p)
           if(p->ticks == 5){
               p->priority++;        
               p->ticks = 0;
+              p->index = index_pointer[1]++;
+              index_pointer[0]--;
           }
       break;
 
@@ -544,12 +564,15 @@ priority_manage(struct proc *p)
           if(p->ticks == 10){
               p->priority++;        
               p->ticks = 0;
+              p->index = index_pointer[2]++;
+              index_pointer[1]--;
           }
       break;
  
       case 2 :
           if(p->ticks == 20){
               p->ticks = 0;
+              p->index = index_pointer[2]++;
           }
       break;
   }
