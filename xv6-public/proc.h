@@ -65,9 +65,9 @@ struct proc {
   char name[16];               // Process name (debugging)
   int priority;                // Process priority for MLFQ scheduling
   int ticks;                   // Time slice which process uses at certain priority level
-  int tickets;
-  int stride;
-  int pass_value;
+  int tickets;                 // Tickets which process uses in stride scheduling
+  int stride;                  // process' stride = total_tickets / process' tickets
+  int pass_value;              // process' pass value += process' stride
 };
 
 // Process memory is laid out contiguously, low addresses first:

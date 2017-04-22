@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "spinlock.h"
 
+/* VARIABLE */
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -21,26 +22,41 @@ extern void trapret(void);
 static void wakeup1(void *chan);
 
 int boost_check = 0;
-//This variable is for checking whether it's priority boost time. Actually it's total ticks.
+// This variable is for checking whether it's priority boost time. Actually it's total ticks.
 
 int total_tickets = 0;
+// This variable is representing total_tickets(Maximum value is 80).
 
 int mlfq_pass_value = 0;
+// This variable is used to decide which scheduler to use
 
 int stride_pass_value = 0;
+// This variable is used to decide which scheduler to use
 
+/* FUNCTION */
 void priority_manage(struct proc *p);
-
+/* This function adjusts process's priority when it has used its all time slice.
+ * @param[struct proc *p]       P is the process which will be managed.
+ */
 int getlev(void);
-
+/* This function returns current process' priority.
+ */
 int set_cpu_share(int share);
-
+/* This function gets cpu share when it's available situation.(when total tickets are less than 80)
+ * @param[int share]        Share is the tickets that user inputs.
+ * @return                  returns amount of tickets.
+ */
 void add_clock(void);
-
+/* This function adds time clock(I mean entire time clock. Not process' time clock),
+ * and do priority boost at proper time(When total time clock == 100)
+ */
 void stride_realloc(void);
-
+/* This function adjusts process' stride when total tickets have been changed.
+ */
 int decide_scheduler(void);
-
+/* This function decides which scheduler to use.
+ * @return      1 if Stride Scheduler is selected, 0 if MLFQ Scheduler is selected.
+ */
 void
 pinit(void)
 {
@@ -93,12 +109,19 @@ found:
   sp -= sizeof *p->context;
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
+
   p->context->eip = (uint)forkret;
+
+  // /* Initialize process' attributes */ //
+
   p->priority = 0;
   // Priority level starts from 0. 0 is the Highest level, 2 is the lowest level.
+
   p->ticks = 0;
   // Initilaize ticks. It'll be used to record use of each process's time slices.
-  // Insert process in to highest queue.
+
+  /* At first, you don't know whether this process will be scheduled in Stride Scheduling.
+     So initialize to 0. (When cpu_set_share is called, this will change those attributes.) */
   p->tickets = 0;
   p->stride = 0;
   p->pass_value = 0;
@@ -241,14 +264,19 @@ exit(void)
     if(p->parent == proc){
       p->parent = initproc;
 
+      /* Adjust abandoned children's attributes. */
       if(p->tickets > 0){
-            total_tickets -= p->tickets;
-            proc->tickets = 0;
-            proc->stride = 0;
-            proc->pass_value = 0;
-            if(total_tickets > 0){
-                stride_realloc();
-            }
+        total_tickets -= p->tickets;
+        // Change total tickets.
+        
+        proc->tickets = 0;
+        proc->stride = 0;
+        proc->pass_value = 0;
+
+        /* Total tickets has been changed, so call stride_realloc(). */
+        if(total_tickets > 0){
+          stride_realloc();
+        }
       }
 
       if(p->state == ZOMBIE)
@@ -259,16 +287,20 @@ exit(void)
   // Jump into the scheduler, never to return.
   proc->state = ZOMBIE;
 
+  /* Adjust current process'(This will be terminated) attributes. */
   if(proc->tickets > 0){
-        total_tickets -= proc->tickets;
-        proc->tickets = 0;
-        proc->stride = 0;
-        proc->pass_value = 0;
-        if(total_tickets > 0){
-            stride_realloc();
-        }
+    total_tickets -= proc->tickets;
+    // Change total tickets.
+
+    proc->tickets = 0;
+    proc->stride = 0;
+    proc->pass_value = 0;
+
+    /* Total tickets has been changed, so call stride_realloc(). */
+    if(total_tickets > 0){
+      stride_realloc();
+    }
   }
-  //stride
 
   sched();
   panic("zombie exit");
@@ -333,12 +365,16 @@ scheduler(void)
     int level, ps_val, i;
 
     for(;;){
-        // Enable interrupts on this processor.
         level = 2;
         ps_val = 0;
 
         sti();
 
+        /* In scheduler function, first it decides which scheduelr to use.
+           Function decide_scheduler() returns 1 when it comes to use Stride Scheduler.
+           It returns 0 when it comes to use MLFQ Scheduler. */
+
+        /* Stride Scheduling */
         if(decide_scheduler()){
             acquire(&ptable.lock);
 
@@ -347,19 +383,24 @@ scheduler(void)
                     ps_val = ref.pass_value;
                     break;
                 }
-            }  
+            } 
+            // Search reference pass value. 
             
             for(i = 0, ref = ptable.proc[i]; i < NPROC; ref = ptable.proc[i++]){
                 if(ref.state == RUNNABLE && ref.tickets != 0 && ref.pass_value < ps_val){
                     ps_val = ref.pass_value;
                 }
             }
+            // Decide pass value. Pass value must be the least one.
 
             for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
                 if(p->state != RUNNABLE || p->pass_value != ps_val){
                     continue;
                 }
+
                 p->pass_value += p->stride;
+                // Manage pass value.
+
                 proc = p;
                 switchuvm(p);
                 p->state = RUNNING;
@@ -369,9 +410,10 @@ scheduler(void)
                 // It should have changed its p->state before coming back.
                 proc = 0;
             }
+            // Search selected process, then schedule it.
         }
-        //stride
-
+        
+        /* MLFQ Scheduling */
         else{
             acquire(&ptable.lock);
 
@@ -380,6 +422,7 @@ scheduler(void)
                     level = ref.priority;
                 }
             }
+            // Decide process' priority. It  must be the least one. 
 
             for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
                 if(p->state != RUNNABLE || p->tickets != 0 ||p->priority != level){
@@ -394,8 +437,8 @@ scheduler(void)
                 // It should have changed its p->state before coming back.
                 proc = 0;
             }
+            // Search selected process, then schedule it.
         }
-        //mlfq
 
         release(&ptable.lock);
     }
@@ -430,10 +473,15 @@ sched(void)
 void
 yield(int timer_interrupt)
 {
+  /* If yield is called from timer_interrupt,
+     you must manage process' time clock. */
+
   if(timer_interrupt){
     proc->ticks++;
     priority_manage(proc);
+    // Add process' time clock, then manage it.
   }
+
   acquire(&ptable.lock);  //DOC: yieldlock
   proc->state = RUNNABLE;
   sched();
@@ -579,7 +627,8 @@ procdump(void)
     cprintf("\n");
   }
 }
-//
+
+/* This function manages argument process's priority. */
 void
 priority_manage(struct proc *p)
 {
@@ -589,6 +638,7 @@ priority_manage(struct proc *p)
               p->priority++;        
               p->ticks = 0;
           }
+          // In case of priority 0 -> 1
       break;
 
       case 1 :
@@ -596,20 +646,26 @@ priority_manage(struct proc *p)
               p->priority++;        
               p->ticks = 0;
           }
+          // In case of priority 1 -> 2
       break;
  
       case 2 :
           if(p->ticks == 20){
               p->ticks = 0;
           }
+          //In case of priority 2 -> 2
       break;
   }
 }
+
+/* This function returns current process' priority. */
 int
 getlev(void)
 {
     return proc->priority;
 }
+
+/* This function set process' tickets, stride, and initialize pass value. */
 int
 set_cpu_share(int share)
 {
@@ -617,27 +673,39 @@ set_cpu_share(int share)
 
         return -1;           
     }
+    // When argument is below 0, returns -1(Error).
+
     else{
         if(total_tickets + share <= 80){
+        // First, check if total tickets become 80(Limitation).
+            
+            /* Set process' tickets, pass value, and reinitialize total tickets. */
             proc->tickets = share;
             total_tickets += share;
             proc->pass_value = 0;
 
+            /* Reinitialize all process' stride. */
             acquire(&ptable.lock);
             stride_realloc();
             release(&ptable.lock);
 
             return share;
         }
-        else
+        else{
             return -1;
+        }
+        // When total tickets become over 80, block the input.
     }
+    // When argument is above 0.
 }
+
+/* This function adds total clock, and boosts priority when it needs. */
 void
 add_clock(void)
 {
     boost_check++;
     
+    /* When it comes to priority boost situation. */
     if(boost_check == 100){
         struct proc ref;
         int i;
@@ -647,17 +715,21 @@ add_clock(void)
         for(i = 0, ref = ptable.proc[i]; i < NPROC; ref = ptable.proc[i++]){
             ref.priority = 0;
             ref.ticks = 0;
-        }      
+        }
+        // Reset all process' priority and time clock.
               
         release(&ptable.lock);
 
         boost_check = 0;
 
-        /*Useless code*/
+        /* Useless cod e*/
         i = ref.priority;
-        //To avoid unused but set problem
+        // To avoid "unused but set problem".
     }
 }
+
+/* This function reinitialize all process' stride.
+   When total tickets change, all process' stride must be changed. */
 void
 stride_realloc(void)
 {
@@ -666,31 +738,48 @@ stride_realloc(void)
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
         if(p->tickets > 0){
             p->stride = total_tickets / p->tickets;
+            // Process' stride = Total tickets / Process' tickets
         }
     }
 }
+
+/* This function decides which scheduler to use.
+   In this function, I apply Stride algorithm once more. */
 int
 decide_scheduler(void)
 {
     int mlfq_stride, stride_stride;
 
     if(total_tickets){
+    /* In every case total tickets are 100(CPU share 100%).
+       Each Scheduler's stride = 100 / Scheduler's tickets.
+
+       Stride Scheduler's tickets : Total tickets which used in 
+                                    Stride Scheduler. (Limitation : 80)
+
+       MLFQ Scheduler's tickests : 100 - Stride Scheduler's tickets. */
+
         stride_stride = 100 / total_tickets;
         mlfq_stride = 100 / (100 - total_tickets);
     }
+
+    /* If there is no process which will be scheduled in Stride Scheduler,
+       (This means total tickets are 0) select MLFQ Scheduler */
     else{
         return 0;
     }
+
+    /* Select scheduler whose pass value is less than the other's. */
 
     if(stride_pass_value <= mlfq_pass_value){
         stride_pass_value += stride_stride;    
         return 1;
     }
-    //Stride
+    // When Stride Scheduler is selected.
 
     else{
         mlfq_pass_value += mlfq_stride;
         return 0;
     }
-    //MLFQ
+    // When MLFQ Scheduler is selected.
 }
