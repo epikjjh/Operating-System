@@ -25,6 +25,10 @@ int boost_check = 0;
 
 int total_tickets = 0;
 
+int mlfq_pass_value = 0;
+
+int stride_pass_value = 0;
+
 void priority_manage(struct proc *p);
 
 int getlev(void);
@@ -34,6 +38,8 @@ int set_cpu_share(int share);
 void add_clock(void);
 
 void stride_realloc(void);
+
+int decide_scheduler(void);
 
 void
 pinit(void)
@@ -94,6 +100,8 @@ found:
   // Initilaize ticks. It'll be used to record use of each process's time slices.
   // Insert process in to highest queue.
   p->tickets = 0;
+  p->stride = 0;
+  p->pass_value = 0;
 
   return p;
 }
@@ -331,17 +339,17 @@ scheduler(void)
 
         sti();
 
-        if(total_tickets){
+        if(decide_scheduler()){
             acquire(&ptable.lock);
 
-            for(ref = ptable.proc[0], i = 0; i < NPROC; ref = ptable.proc[i++]){
+            for(i = 0, ref = ptable.proc[i]; i < NPROC; ref = ptable.proc[i++]){
                 if(ref.state == RUNNABLE && ref.tickets != 0){
                     ps_val = ref.pass_value;
                     break;
                 }
             }  
             
-            for(ref = ptable.proc[0], i = 0; i < NPROC; ref = ptable.proc[i++]){
+            for(i = 0, ref = ptable.proc[i]; i < NPROC; ref = ptable.proc[i++]){
                 if(ref.state == RUNNABLE && ref.tickets != 0 && ref.pass_value < ps_val){
                     ps_val = ref.pass_value;
                 }
@@ -367,7 +375,7 @@ scheduler(void)
         else{
             acquire(&ptable.lock);
 
-            for(ref = ptable.proc[0], i = 0; i < NPROC; ref = ptable.proc[i++]){
+            for(i = 0, ref = ptable.proc[i]; i < NPROC; ref = ptable.proc[i++]){
                 if(ref.state == RUNNABLE && ref.tickets == 0  && ref.priority < level){
                     level = ref.priority;
                 }
@@ -628,21 +636,26 @@ set_cpu_share(int share)
 void
 add_clock(void)
 {
-    struct proc *p;
-
     boost_check++;
     
     if(boost_check == 100){
+        struct proc ref;
+        int i;
+
         acquire(&ptable.lock);
 
-        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-            p->priority = 0;
-            p->ticks = 0;
+        for(i = 0, ref = ptable.proc[i]; i < NPROC; ref = ptable.proc[i++]){
+            ref.priority = 0;
+            ref.ticks = 0;
         }      
               
         release(&ptable.lock);
 
         boost_check = 0;
+
+        /*Useless code*/
+        i = ref.priority;
+        //To avoid unused but set problem
     }
 }
 void
@@ -655,4 +668,29 @@ stride_realloc(void)
             p->stride = total_tickets / p->tickets;
         }
     }
+}
+int
+decide_scheduler(void)
+{
+    int mlfq_stride, stride_stride;
+
+    if(total_tickets){
+        stride_stride = 100 / total_tickets;
+        mlfq_stride = 100 / (100 - total_tickets);
+    }
+    else{
+        return 0;
+    }
+
+    if(stride_pass_value <= mlfq_pass_value){
+        stride_pass_value += stride_stride;    
+        return 1;
+    }
+    //Stride
+
+    else{
+        mlfq_pass_value += mlfq_stride;
+        return 0;
+    }
+    //MLFQ
 }
