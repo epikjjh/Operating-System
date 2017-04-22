@@ -20,24 +20,20 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
-int stride[NPROC];
-
 int boost_check = 0;
 //This variable is for checking whether it's priority boost time. Actually it's total ticks.
 
-int index_pointer[3] = {0};
-//This variavle is for checking how much processes are in each queue.
-//It's initialzed at declaration time.
-
-int stride_pointer = 0;
-
-int total_share = 0;
+int total_tickets = 0;
 
 void priority_manage(struct proc *p);
 
 int getlev(void);
 
 int set_cpu_share(int share);
+
+void add_clock(void);
+
+void stride_realloc(void);
 
 void
 pinit(void)
@@ -59,7 +55,7 @@ allocproc(void)
   acquire(&ptable.lock);
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == UNUSED && index_pointer[0] < NPROC)
+    if(p->state == UNUSED)
         // Execption handling : When highest queue is full.
       goto found;
 
@@ -94,15 +90,10 @@ found:
   p->context->eip = (uint)forkret;
   p->priority = 0;
   // Priority level starts from 0. 0 is the Highest level, 2 is the lowest level.
-  p->index = index_pointer[0]++; 
   p->ticks = 0;
   // Initilaize ticks. It'll be used to record use of each process's time slices.
   // Insert process in to highest queue.
-
-  if(p->share > 0){
-        stride[stride_pointer] = p->pid;
-        stride_pointer++;
-  }
+  p->tickets = 0;
 
   return p;
 }
@@ -241,6 +232,15 @@ exit(void)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->parent == proc){
       p->parent = initproc;
+
+      if(p->tickets > 0){
+            total_tickets -= p->tickets;
+            proc->tickets = 0;
+            if(total_tickets > 0){
+                stride_realloc();
+            }
+      }
+
       if(p->state == ZOMBIE)
         wakeup1(initproc);
     }
@@ -248,7 +248,16 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   proc->state = ZOMBIE;
-  index_pointer[proc->priority]--;
+
+  if(proc->tickets > 0){
+        total_tickets -= proc->tickets;
+        proc->tickets = 0;
+        if(total_tickets > 0){
+            stride_realloc();
+        }
+  }
+  //stride
+
   sched();
   panic("zombie exit");
 }
@@ -307,68 +316,76 @@ wait(void)
 void
 scheduler(void)
 {
-  struct proc *p; 
-  int level, index;
+    struct proc *p; 
+    int level, ps_val;
 
-  for(;;){
-    level = 2;
-    index = NPROC;
-    // Enable interrupts on this processor.
-    sti();
+    for(;;){
+        // Enable interrupts on this processor.
+        level = 2;
+        ps_val = 0;
 
-    acquire(&ptable.lock);
-    for(p=ptable.proc; p < &ptable.proc[NPROC];p++){
-        if(p->state == RUNNABLE && p->priority < level){
-            level = p->priority;
-        }
-    }
-    release(&ptable.lock);
+        sti();
 
-    acquire(&ptable.lock);
-    for(p=ptable.proc; p < &ptable.proc[NPROC];p++){
-        if(p->state == RUNNABLE && p->priority == level && p->index < index){
-            index = p->index;
-        }
-    }
-    release(&ptable.lock);
+        if(total_tickets){
+            acquire(&ptable.lock);
 
-    acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-        if(p->state != RUNNABLE || p->priority != level /*|| p->index != index*/){
-            continue;
-        }
-        priority_manage(p);
-        proc = p;
-        switchuvm(p);
-        p->state = RUNNING;
-        swtch(&cpu->scheduler, p->context);
-        switchkvm();
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-    }
-    release(&ptable.lock);
-
-    boost_check++;
-    if(boost_check == 100){
-        acquire(&ptable.lock);
-        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-            if(p->priority == 1){
-                p->index = index_pointer[0]++;
-                index_pointer[1]--;
+            for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
+                if(p->state == RUNNABLE && p->tickets != 0){
+                    ps_val = p->pass_value;
+                    break;
+                }
+            }  
+            
+            for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
+                if(p->state == RUNNABLE && p->tickets != 0 && p->pass_value < ps_val){
+                    ps_val = p->pass_value;
+                }
             }
-            else if(p->priority == 2){
-                p->index = index_pointer[0]++;
-                index_pointer[2]--;
-            }
-            p->priority = 0;
-            p->ticks = 0;
 
+            for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+                if(p->state != RUNNABLE || p->pass_value != ps_val){
+                    continue;
+                }
+                p->pass_value += p->stride;
+                proc = p;
+                switchuvm(p);
+                p->state = RUNNING;
+                swtch(&cpu->scheduler, p->context);
+                switchkvm();
+                // Process is done running for now.
+                // It should have changed its p->state before coming back.
+                proc = 0;
+            }
         }
+        //stride
+
+        else{
+            acquire(&ptable.lock);
+
+            for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
+                if(p->state == RUNNABLE && p->tickets == 0  && p->priority < level){
+                    level = p->priority;
+                }
+            }
+
+            for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+                if(p->state != RUNNABLE || p->tickets != 0 ||p->priority != level){
+                    continue;
+                }
+                proc = p;
+                switchuvm(p);
+                p->state = RUNNING;
+                swtch(&cpu->scheduler, p->context);
+                switchkvm();
+                // Process is done running for now.
+                // It should have changed its p->state before coming back.
+                proc = 0;
+            }
+        }
+        //mlfq
+
         release(&ptable.lock);
-
-        boost_check = 0;   
     }
-  }
 }
 
 // Enter scheduler.  Must hold only ptable.lock
@@ -398,8 +415,12 @@ sched(void)
 
 // Give up the CPU for one scheduling round.
 void
-yield(void)
+yield(int timer_interrupt)
 {
+  if(timer_interrupt){
+    proc->ticks++;
+    priority_manage(proc);
+  }
   acquire(&ptable.lock);  //DOC: yieldlock
   proc->state = RUNNABLE;
   sched();
@@ -549,14 +570,11 @@ procdump(void)
 void
 priority_manage(struct proc *p)
 {
-  p->ticks++;
   switch (p->priority) {
       case 0 :
           if(p->ticks == 5){
               p->priority++;        
               p->ticks = 0;
-              p->index = index_pointer[1]++;
-              index_pointer[0]--;
           }
       break;
 
@@ -564,15 +582,12 @@ priority_manage(struct proc *p)
           if(p->ticks == 10){
               p->priority++;        
               p->ticks = 0;
-              p->index = index_pointer[2]++;
-              index_pointer[1]--;
           }
       break;
  
       case 2 :
           if(p->ticks == 20){
               p->ticks = 0;
-              p->index = index_pointer[2]++;
           }
       break;
   }
@@ -586,13 +601,53 @@ int
 set_cpu_share(int share)
 {
     if(share <= 0){
-        proc->share = -1;
 
         return -1;           
     }
     else{
-        proc->share = share;
+        if(total_tickets + share <= 80){
+            proc->tickets = share;
+            total_tickets += share;
+            proc->pass_value = 0;
 
-        return share;
+            acquire(&ptable.lock);
+            stride_realloc();
+            release(&ptable.lock);
+
+            return share;
+        }
+        else
+            return -1;
+    }
+}
+void
+add_clock(void)
+{
+    struct proc *p;
+
+    boost_check++;
+    
+    if(boost_check == 100){
+        acquire(&ptable.lock);
+
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+            p->priority = 0;
+            p->ticks = 0;
+        }      
+              
+        release(&ptable.lock);
+
+        boost_check = 0;
+    }
+}
+void
+stride_realloc(void)
+{
+    struct proc *p;
+
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->tickets > 0){
+            p->stride = total_tickets / p->tickets;
+        }
     }
 }

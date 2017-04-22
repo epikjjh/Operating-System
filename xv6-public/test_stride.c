@@ -26,7 +26,6 @@ main(int argc, char *argv[])
   }
 
   cpu_share = atoi(argv[1]);
-
   // Register this process to the Stride scheduler
   if (set_cpu_share(cpu_share) < 0) {
     printf(1, "cannot set cpu share\n");

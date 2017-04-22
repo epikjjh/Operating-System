@@ -53,17 +53,17 @@ int
 sys_set_cpu_share(void)
 {
     int share;
-    
-    if(argint(0, &share) <= 0)
-        return -1;
 
+    if(argint(0, &share) < 0)
+        return -1;
+    
     return set_cpu_share(share);
 }
 
 int
 sys_yield(void)
 {
-    yield();
+    yield(0);
     return 0;
 }
 

@@ -64,9 +64,10 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   int priority;                // Process priority for MLFQ scheduling
-  int index;
   int ticks;                   // Time slice which process uses at certain priority level
-  int share;
+  int tickets;
+  int stride;
+  int pass_value;
 };
 
 // Process memory is laid out contiguously, low addresses first:
