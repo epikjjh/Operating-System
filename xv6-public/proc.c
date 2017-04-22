@@ -236,6 +236,8 @@ exit(void)
       if(p->tickets > 0){
             total_tickets -= p->tickets;
             proc->tickets = 0;
+            proc->stride = 0;
+            proc->pass_value = 0;
             if(total_tickets > 0){
                 stride_realloc();
             }
@@ -252,6 +254,8 @@ exit(void)
   if(proc->tickets > 0){
         total_tickets -= proc->tickets;
         proc->tickets = 0;
+        proc->stride = 0;
+        proc->pass_value = 0;
         if(total_tickets > 0){
             stride_realloc();
         }
@@ -317,7 +321,8 @@ void
 scheduler(void)
 {
     struct proc *p; 
-    int level, ps_val;
+    struct proc ref;
+    int level, ps_val, i;
 
     for(;;){
         // Enable interrupts on this processor.
@@ -329,16 +334,16 @@ scheduler(void)
         if(total_tickets){
             acquire(&ptable.lock);
 
-            for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
-                if(p->state == RUNNABLE && p->tickets != 0){
-                    ps_val = p->pass_value;
+            for(ref = ptable.proc[0], i = 0; i < NPROC; ref = ptable.proc[i++]){
+                if(ref.state == RUNNABLE && ref.tickets != 0){
+                    ps_val = ref.pass_value;
                     break;
                 }
             }  
             
-            for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
-                if(p->state == RUNNABLE && p->tickets != 0 && p->pass_value < ps_val){
-                    ps_val = p->pass_value;
+            for(ref = ptable.proc[0], i = 0; i < NPROC; ref = ptable.proc[i++]){
+                if(ref.state == RUNNABLE && ref.tickets != 0 && ref.pass_value < ps_val){
+                    ps_val = ref.pass_value;
                 }
             }
 
@@ -362,9 +367,9 @@ scheduler(void)
         else{
             acquire(&ptable.lock);
 
-            for(p = ptable.proc; p < &ptable.proc[NPROC];p++){
-                if(p->state == RUNNABLE && p->tickets == 0  && p->priority < level){
-                    level = p->priority;
+            for(ref = ptable.proc[0], i = 0; i < NPROC; ref = ptable.proc[i++]){
+                if(ref.state == RUNNABLE && ref.tickets == 0  && ref.priority < level){
+                    level = ref.priority;
                 }
             }
 
