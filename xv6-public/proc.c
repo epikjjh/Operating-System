@@ -771,7 +771,7 @@ decide_scheduler(void)
 
     /* Select scheduler whose pass value is less than the other's. */
 
-    if(stride_pass_value <= mlfq_pass_value){
+    if(stride_pass_value <= stride_pass_value){
         stride_pass_value += stride_stride;    
         return 1;
     }

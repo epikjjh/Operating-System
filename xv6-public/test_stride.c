@@ -8,7 +8,7 @@
 #include "stat.h"
 #include "user.h"
 
-#define LIFETIME        1000        // (ticks)
+#define LIFETIME        2000        // (ticks)
 #define COUNT_PERIOD    1000000     // (iteration)
 
 int
