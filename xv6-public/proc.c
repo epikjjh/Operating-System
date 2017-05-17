@@ -57,6 +57,7 @@ int decide_scheduler(void);
 /* This function decides which scheduler to use.
  * @return      1 if Stride Scheduler is selected, 0 if MLFQ Scheduler is selected.
  */
+
 void
 pinit(void)
 {
@@ -128,7 +129,6 @@ found:
 
   return p;
 }
-
 //PAGEBREAK: 32
 // Set up first user process.
 void
