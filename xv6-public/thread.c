@@ -8,10 +8,6 @@
 #include "spinlock.h"
 
 /* VARIABLE */
-struct {
-  struct spinlock lock;
-  struct thread_t thread[NPROC];
-} ttable;
 
 int nexttid = 1;
 extern void forkret(void);
@@ -21,57 +17,6 @@ static void wakeup1(void *chan);
 
 typedef uint thread_t;
 
-void
-tinit(void)
-{
-  initlock(&ttable.lock, "ttable");
-}
-static struct thread_t*
-allocthread(void)
-{
-  struct thread_t *t;
-  char *sp;
-
-  acquire(&ttable.lock);
-
-  for(t = ttable.thread; t < &ttable.thread[NPROC]; t++)
-    if(t->state == UNUSED)
-        // Execption handling : When highest queue is full.
-      goto found;
-
-  release(&ttable.lock);
-  return 0;
-
-found:
-  t->state = EMBRYO;
-  t->tid = nexttid++;
-
-  release(&ttable.lock);
-
-  // Allocate kernel stack.
-  if((t->kstack = kalloc()) == 0){
-    t->state = UNUSED;
-    return 0;
-  }
-  sp = t->kstack + KSTACKSIZE;
-
-  // Leave room for trap frame.
-  sp -= sizeof *t->tf;
-  t->tf = (struct trapframe*)sp;
-
-  // Set up new context to start executing at forkret,
-  // which returns to trapret.
-  sp -= 4;
-  *(uint*)sp = (uint)trapret;
-
-  sp -= sizeof *t->context;
-  t->context = (struct context*)sp;
-  memset(t->context, 0, sizeof *t->context);
-
-  t->context->eip = (uint)forkret;
-
-  return t;
-}
 /*
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
@@ -224,12 +169,14 @@ int
 thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 {
     int i, pid;
-    struct thread_t *nt;
+    struct proc *nt, *tparent;
+    uint sp, ustack[3+MAXARG+1];
 
     // Allocate thread.
-    if((nt = allocthread()) == 0){
+    if((nt = allocproc()) == 0){
         return -1;
     }
+    nt->tid = nexttid++;
 
     nt->pgdir = proc->pgdir;
     //Same page directory in case of thread.
@@ -238,10 +185,14 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     nt->parent = proc;
     *nt->tf = *proc->tf;
 
+    // When thread calls thread_create
+    while(proc->tid > 0){
+        tparent = proc;
+    }
+    nt->parent = proc->pid;
+
     // Clear %eax so that fork returns 0 in the child.
     nt->tf->eax = 0;
-    // Return to start routine
-    nt->tf->eip = (uint)(*start_routine)(void *); 
 
     for(i = 0; i < NOFILE; i++)
         if(proc->ofile[i])
@@ -249,6 +200,22 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     nt->cwd = idup(proc->cwd);
 
     safestrcpy(nt->name, proc->name, sizeof(proc->name));
+
+    // User stack
+    sp = 
+    ustack[3+argc] = 0;
+
+    ustack[0] = 0xffffffff;  // fake return PC
+    ustack[1] = argc;
+    ustack[2] = sp - (argc+1)*4;  // argv pointer
+
+    sp -= (3+argc+1) * 4;
+    if(copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
+        return -1;
+
+    // Return to start routine
+    nt->tf->eip = (uint)(*start_routine)(void *); 
+    nt->tf->esp = sp;
 
     *thread = nt->tid;
     acquire(&ttable.lock);
@@ -267,108 +234,3 @@ thread_join(thread_t thread, void **retval)
 {
 
 }
-/*
-int
-exec(char *path, char **argv)
-{
-  char *s, *last;
-  int i, off;
-  uint argc, sz, sp, ustack[3+MAXARG+1];
-  struct elfhdr elf;
-  struct inode *ip;
-  struct proghdr ph;
-  pde_t *pgdir, *oldpgdir;
-
-  begin_op();
-
-  if((ip = namei(path)) == 0){
-    end_op();
-    return -1;
-  }
-  ilock(ip);
-  pgdir = 0;
-
-  // Check ELF header
-  if(readi(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
-    goto bad;
-  if(elf.magic != ELF_MAGIC)
-    goto bad;
-
-  if((pgdir = setupkvm()) == 0)
-    goto bad;
-
-  // Load program into memory.
-  sz = 0;
-  for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
-    if(readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
-      goto bad;
-    if(ph.type != ELF_PROG_LOAD)
-      continue;
-    if(ph.memsz < ph.filesz)
-      goto bad;
-    if(ph.vaddr + ph.memsz < ph.vaddr)
-      goto bad;
-    if((sz = allocuvm(pgdir, sz, ph.vaddr + ph.memsz)) == 0)
-      goto bad;
-    if(ph.vaddr % PGSIZE != 0)
-      goto bad;
-    if(loaduvm(pgdir, (char*)ph.vaddr, ip, ph.off, ph.filesz) < 0)
-      goto bad;
-  }
-  iunlockput(ip);
-  end_op();
-  ip = 0;
-
-  // Allocate two pages at the next page boundary.
-  // Make the first inaccessible.  Use the second as the user stack.
-  sz = PGROUNDUP(sz);
-  if((sz = allocuvm(pgdir, sz, sz + 2*PGSIZE)) == 0)
-    goto bad;
-  clearpteu(pgdir, (char*)(sz - 2*PGSIZE));
-  sp = sz;
-
-  // Push argument strings, prepare rest of stack in ustack.
-  for(argc = 0; argv[argc]; argc++) {
-    if(argc >= MAXARG)
-      goto bad;
-    sp = (sp - (strlen(argv[argc]) + 1)) & ~3;
-    if(copyout(pgdir, sp, argv[argc], strlen(argv[argc]) + 1) < 0)
-      goto bad;
-    ustack[3+argc] = sp;
-  }
-  ustack[3+argc] = 0;
-
-  ustack[0] = 0xffffffff;  // fake return PC
-  ustack[1] = argc;
-  ustack[2] = sp - (argc+1)*4;  // argv pointer
-
-  sp -= (3+argc+1) * 4;
-  if(copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
-    goto bad;
-
-  // Save program name for debugging.
-  for(last=s=path; *s; s++)
-    if(*s == '/')
-      last = s+1;
-  safestrcpy(proc->name, last, sizeof(proc->name));
-
-  // Commit to the user image.
-  oldpgdir = proc->pgdir;
-  proc->pgdir = pgdir;
-  proc->sz = sz;
-  proc->tf->eip = elf.entry;  // main
-  proc->tf->esp = sp;
-  switchuvm(proc);
-  freevm(oldpgdir);
-  return 0;
-
- bad:
-  if(pgdir)
-    freevm(pgdir);
-  if(ip){
-    iunlockput(ip);
-    end_op();
-  }
-  return -1;
-}
-*/
