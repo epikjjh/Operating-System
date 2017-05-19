@@ -119,9 +119,9 @@ void            yield(int timer_interrupt);
 int             getlev(void);
 int             set_cpu_share(int share);
 void            add_clock(void);
-
-//thread.c
-void            tinit(void);
+int             thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg);
+void            thread_exit(void *retval);
+int             thread_join(thread_t thread, void **retval);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

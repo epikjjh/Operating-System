@@ -16,6 +16,8 @@ struct {
 static struct proc *initproc;
 
 int nextpid = 1;
+int nexttid = 1;
+
 extern void forkret(void);
 extern void trapret(void);
 
@@ -88,6 +90,8 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  // Thread ID initialize.
+  p->tid = -1;
 
   release(&ptable.lock);
 
@@ -782,4 +786,122 @@ decide_scheduler(void)
         return 0;
     }
     // When MLFQ Scheduler is selected.
+}
+int
+thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
+{
+    int i;
+
+    struct proc *nt, *tparent;
+    uint sp, ustack[2];
+
+    // Allocate thread
+    if((nt = allocproc()) == 0){
+        return -1;
+    }
+    // Initialize thread ID.
+    nt->tid = nexttid++;
+
+    nt->pgdir = proc->pgdir;
+    *nt->tf = *proc->tf;
+
+    // When thread calls thread_create. Including nested case.
+    tparent = proc;
+    while(tparent->tid > 0){
+        tparent = tparent->parent;
+    }
+    nt->parent = tparent;
+
+    // Clear %eax so that fork returns 0 in the child.
+    nt->tf->eax = 0;
+
+    for(i = 0; i < NOFILE; i++){
+        if(proc->ofile[i]){
+            nt->ofile[i] = filedup(proc->ofile[i]);
+        }
+    }
+    nt->cwd = idup(proc->cwd);
+
+    safestrcpy(nt->name, tparent->name, sizeof(tparent->name));
+
+    // User stack
+    if((sp = allocuvm(nt->pgdir, tparent->sz, tparent->sz + PGSIZE))==0){
+        return -1;
+    }
+    tparent->sz = sp;
+    nt->sz = sp;
+
+    ustack[0] = 0xffffffff;  // fake return PC
+    ustack[1] = (uint)arg;
+
+    sp -= 8;
+    if(copyout(nt->pgdir, sp, ustack, 8) < 0){
+        return -1;
+    }
+
+    // Return to start routine
+    nt->tf->eip = (uint)(*start_routine);
+    nt->tf->esp = sp;
+  
+    *thread = nt->tid;
+
+    acquire(&ptable.lock);
+    nt->state = RUNNABLE;
+    release(&ptable.lock);
+ 
+    switchuvm(nt);
+
+    return 0;
+}
+void
+thread_exit(void *retval)
+{
+    if(proc->tid > 0){
+        proc->state = ZOMBIE;
+    }
+    
+   // *retval = proc-
+
+}
+int
+thread_join(thread_t thread, void **retval)
+{
+    struct proc *p;
+    int havekids, pid;
+
+    acquire(&ptable.lock);
+    for(;;){
+        // Scan through table looking for exited children.
+        havekids = 0;
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+            if(p->parent != proc)
+                continue;
+            havekids = 1;
+            if(p->state == ZOMBIE){
+            // Found one.
+                pid = p->pid;
+                kfree(p->kstack);
+                p->kstack = 0;
+                freevm(p->pgdir);
+                p->pid = 0;
+                p->parent = 0;
+                p->name[0] = 0;
+                p->killed = 0;
+                p->state = UNUSED;
+                release(&ptable.lock);
+                return pid;
+            }
+        }
+
+        // No point waiting if we don't have any children.
+        if(!havekids || proc->killed){
+            release(&ptable.lock);
+                return -1;
+        }
+
+        // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+        sleep(proc, &ptable.lock);  //DOC: wait-sleep
+    }
+
+    return 0;
 }
