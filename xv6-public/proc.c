@@ -787,6 +787,15 @@ decide_scheduler(void)
     }
     // When MLFQ Scheduler is selected.
 }
+/* Thread Function */
+
+/* This function creates thread with given argument(arg).
+ * Then saves its thread id in given argument(thread).
+ * @param[out]    thread           ID of new thread
+ * @param[in]     start_routine    Thread function to execute(main function of new thread)
+ * @param[in]     arg              argument pass to start_routine
+ * return                          If souccess 0, else -1
+ */
 int
 thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 {
@@ -794,6 +803,8 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 
     struct proc *nt, *tparent;
     uint sp, ustack[2];
+
+    /* kernel stack */
 
     // Allocate thread
     if((nt = allocproc()) == 0){
@@ -812,13 +823,12 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     // Reallocate pid
     nt->pid = tparent->pid;
     nextpid--;
+
     nt->pgdir = tparent->pgdir;
     *nt->tf = *tparent->tf;
 
+    // Copy size of process memory
     nt->sz = tparent->sz;
-
-    // Clear %eax so that fork returns 0 in the child.
-    nt->tf->eax = 0;
 
     for(i = 0; i < NOFILE; i++){
         if(proc->ofile[i]){
@@ -829,40 +839,50 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 
     safestrcpy(nt->name, tparent->name, sizeof(tparent->name));
 
-    // User stack
+    /* User stack */
     if((sp = allocuvm(nt->pgdir, nt->sz, nt->sz + PGSIZE))==0){
         return -1;
     }
 
+    // Reallocate sz
     tparent->sz = sp;
     nt->sz = sp;
 
     ustack[0] = 0xffffffff;  // fake return PC
     ustack[1] = (uint)arg;
 
+    // Decrease stack pointer(size of uint * 2)
     sp -= 8;
     if(copyout(nt->pgdir, sp, ustack, 8) < 0){
         return -1;
     }
 
-    // Return to start routine
+    // Save start routine(Return address) in eip
     nt->tf->eip = (uint)(*start_routine);
+    // Save new sp in esp
     nt->tf->esp = sp;
   
+    // Save thread ID in given argument
     *thread = nt->tid;
 
+    // Change new thread's state
     acquire(&ptable.lock);
     nt->state = RUNNABLE;
     release(&ptable.lock);
 
     return 0;
 }
+
+/* This function terminates current thread.
+ * @param[in]     retval    Another thread which waits for the thread
+ *                          by thread_join can get this value.
+ */
 void
 thread_exit(void *retval)
 {
-    struct proc *p;
     int fd;
 
+    // Save current thread's return value
     proc->ret_val = retval;
 
     if(proc == initproc)
@@ -886,24 +906,19 @@ thread_exit(void *retval)
     // Parent might be sleeping in wait().
     wakeup1(proc->parent);
 
-    // Pass abandoned children to init.
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-        if(p->parent == proc){
-            p->parent = initproc;
-
-        /* Adjust abandoned children's attributes. */
-
-        if(p->state == ZOMBIE)
-            wakeup1(initproc);
-        }
-    }
-
+    // Change thread's state. 
     // Jump into the scheduler, never to return.
     proc->state = ZOMBIE;
 
     sched();
     panic("zombie exit");
 }
+
+/* This function waits for the termination of a specific thread.
+ * @param[out]    thread           Thread ID of target thread which would terminate
+ * @param[in]     arg              Return value of terminated thread
+ * return                          If souccess 0, else -1
+ */
 int
 thread_join(thread_t thread, void **retval)
 {
@@ -920,28 +935,40 @@ thread_join(thread_t thread, void **retval)
             havethread = 1;
             if(p->state == ZOMBIE){
             // Found one.
+                /* Reset attributes. */
+
+                // Deallocate kernel stack.
                 kfree(p->kstack);
                 p->kstack = 0;
+
                 p->pid = 0;
                 p->tid = 0;
+
+                // Store thread's return value.
+                *retval = p->ret_val;
+                p->ret_val = 0;
+                
+                // Deallocate user stack.
                 deallocuvm(p->parent->pgdir, p->sz, p->sz - PGSIZE);
+
+                p->sz = 0;
                 p->parent = 0;
                 p->name[0] = 0;
                 p->killed = 0;
                 p->state = UNUSED;
-                *retval = p->ret_val;
                 release(&ptable.lock);
+
                 return 0;
             }
         }
 
-        // No point waiting if we don't have any children.
+        // No point waiting if it's not the chosen thread.
         if(!havethread || proc->killed){
             release(&ptable.lock);
             return -1;
         }
 
-        // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+        // Wait for the chosen thread to exit.  (See wakeup1 call in proc_exit.)
         sleep(proc, &ptable.lock);  //DOC: wait-sleep
     }
 }
