@@ -811,6 +811,11 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
         tparent = tparent->parent;
     }
     nt->parent = tparent;
+    nt->sz = tparent->sz;
+
+    // Reallocate pid
+    nt->pid = tparent->pid;
+    nextpid--;
 
     // Clear %eax so that fork returns 0 in the child.
     nt->tf->eax = 0;
@@ -825,11 +830,13 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     safestrcpy(nt->name, tparent->name, sizeof(tparent->name));
 
     // User stack
-    if((sp = allocuvm(nt->pgdir, tparent->sz, tparent->sz + PGSIZE))==0){
+    if((sp = allocuvm(nt->pgdir, nt->sz, nt->sz + PGSIZE))==0){
         return -1;
     }
+
     tparent->sz = sp;
     nt->sz = sp;
+    sp = nt->sz;
 
     ustack[0] = 0xffffffff;  // fake return PC
     ustack[1] = (uint)arg;
@@ -856,52 +863,86 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 void
 thread_exit(void *retval)
 {
-    if(proc->tid > 0){
-        proc->state = ZOMBIE;
-    }
-    
-   // *retval = proc-
+    struct proc *p;
+    int fd;
 
+    proc->ret_val = retval;
+
+    if(proc == initproc)
+        panic("init exiting");
+
+    // Close all open files.
+    for(fd = 0; fd < NOFILE; fd++){
+        if(proc->ofile[fd]){
+            fileclose(proc->ofile[fd]);
+            proc->ofile[fd] = 0;
+        }
+    } 
+
+    begin_op();
+    iput(proc->cwd);
+    end_op();
+    proc->cwd = 0;
+
+    acquire(&ptable.lock);
+
+    // Parent might be sleeping in wait().
+    wakeup1(proc->parent);
+
+    // Pass abandoned children to init.
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->parent == proc){
+            p->parent = initproc;
+
+        /* Adjust abandoned children's attributes. */
+
+        if(p->state == ZOMBIE)
+            wakeup1(initproc);
+        }
+    }
+
+    // Jump into the scheduler, never to return.
+    proc->state = ZOMBIE;
+
+    sched();
+    panic("zombie exit");
 }
 int
 thread_join(thread_t thread, void **retval)
 {
     struct proc *p;
-    int havekids, pid;
+    int havekids;
 
     acquire(&ptable.lock);
     for(;;){
         // Scan through table looking for exited children.
         havekids = 0;
         for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-            if(p->parent != proc)
+            if(p->tid != thread)
                 continue;
             havekids = 1;
             if(p->state == ZOMBIE){
             // Found one.
-                pid = p->pid;
                 kfree(p->kstack);
                 p->kstack = 0;
-                freevm(p->pgdir);
                 p->pid = 0;
                 p->parent = 0;
                 p->name[0] = 0;
                 p->killed = 0;
                 p->state = UNUSED;
+                *retval = p->ret_val;
                 release(&ptable.lock);
-                return pid;
+                return 0;
             }
         }
 
         // No point waiting if we don't have any children.
         if(!havekids || proc->killed){
             release(&ptable.lock);
-                return -1;
+            return -1;
         }
 
         // Wait for children to exit.  (See wakeup1 call in proc_exit.)
         sleep(proc, &ptable.lock);  //DOC: wait-sleep
     }
-
-    return 0;
 }

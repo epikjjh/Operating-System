@@ -69,6 +69,7 @@ struct proc {
   int tickets;                 // Tickets which process uses in stride scheduling
   int stride;                  // process' stride = total_tickets / process' tickets
   int pass_value;              // process' pass value += process' stride
+  void *ret_val;               // Return value of thread
 };
 
 // Process memory is laid out contiguously, low addresses first:
