@@ -802,20 +802,20 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     // Initialize thread ID.
     nt->tid = nexttid++;
 
-    nt->pgdir = proc->pgdir;
-    *nt->tf = *proc->tf;
-
     // When thread calls thread_create. Including nested case.
     tparent = proc;
     while(tparent->tid > 0){
         tparent = tparent->parent;
     }
     nt->parent = tparent;
-    nt->sz = tparent->sz;
 
     // Reallocate pid
     nt->pid = tparent->pid;
     nextpid--;
+    nt->pgdir = tparent->pgdir;
+    *nt->tf = *tparent->tf;
+
+    nt->sz = tparent->sz;
 
     // Clear %eax so that fork returns 0 in the child.
     nt->tf->eax = 0;
@@ -836,7 +836,6 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 
     tparent->sz = sp;
     nt->sz = sp;
-    sp = nt->sz;
 
     ustack[0] = 0xffffffff;  // fake return PC
     ustack[1] = (uint)arg;
@@ -855,8 +854,6 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     acquire(&ptable.lock);
     nt->state = RUNNABLE;
     release(&ptable.lock);
- 
-    switchuvm(nt);
 
     return 0;
 }
@@ -911,21 +908,23 @@ int
 thread_join(thread_t thread, void **retval)
 {
     struct proc *p;
-    int havekids;
+    int havethread;
 
     acquire(&ptable.lock);
     for(;;){
         // Scan through table looking for exited children.
-        havekids = 0;
+        havethread = 0;
         for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
             if(p->tid != thread)
                 continue;
-            havekids = 1;
+            havethread = 1;
             if(p->state == ZOMBIE){
             // Found one.
                 kfree(p->kstack);
                 p->kstack = 0;
                 p->pid = 0;
+                p->tid = 0;
+                deallocuvm(p->parent->pgdir, p->sz, p->sz - PGSIZE);
                 p->parent = 0;
                 p->name[0] = 0;
                 p->killed = 0;
@@ -937,7 +936,7 @@ thread_join(thread_t thread, void **retval)
         }
 
         // No point waiting if we don't have any children.
-        if(!havekids || proc->killed){
+        if(!havethread || proc->killed){
             release(&ptable.lock);
             return -1;
         }
