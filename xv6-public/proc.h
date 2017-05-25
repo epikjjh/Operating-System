@@ -51,11 +51,13 @@ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
+  uint std;                    // Location of top stack for each thread or process
   pde_t* pgdir;                // Page table
   char *kstack;                // Bottom of kernel stack for this process
   enum procstate state;        // Process state
   int pid;                     // Process ID
   int tid;                     // Thread ID
+  int tspace[NPROC];           // Thread space
   struct proc *parent;         // Parent process
   struct trapframe *tf;        // Trap frame for current syscall
   struct context *context;     // swtch() here to run process

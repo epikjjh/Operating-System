@@ -810,7 +810,7 @@ decide_scheduler(void)
 int
 thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 {
-    int i,espace = -1;
+    int i,espace;
 
     struct proc *nt, *tparent;
     uint sp, ustack[2];
@@ -823,9 +823,6 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     }
     // Initialize thread ID.
     nt->tid = nexttid++;
-    
-    // Initialize standard. Only parent can have standard.    
-    nt->std = -1;
 
     // When thread calls thread_create. Including nested case.
     tparent = proc;
@@ -859,22 +856,18 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     for(i = 0; i < NPROC; i++){
         if(tparent->tspace[i] == 0){
             tparent->tspace[i] = 1;
-            nt->tspace[i] = 1;
-            espace = i;
+            espace = i+1;
             break;
         }
     }
-    // When there are no empty spaces : error
-    if(espace < 0){
-        return -1;
-    }
 
-    if((sp = allocuvm(tparent->pgdir, tparent->std + PGSIZE + (3 * PGSIZE) * (espace), tparent->std + PGSIZE + (3 * PGSIZE) * (espace) + 2 * PGSIZE))==0){   
+    if((sp = allocuvm(tparent->pgdir, tparent->std + (PGSIZE * espace), tparent->std + (PGSIZE * espace) + 2*PGSIZE))==0){   
         return -1;
     }
-    clearpteu(tparent->pgdir, (char*)(tparent->std + PGSIZE + (3 * PGSIZE) * (espace)));
+    clearpteu(tparent->pgdir, (char*)(tparent->std + (PGSIZE * espace)));
 
     // Reallocate sz
+    tparent->sz = sp;
     nt->sz = sp;
 
     ustack[0] = 0xffffffff;  // fake return PC
@@ -952,7 +945,7 @@ int
 thread_join(thread_t thread, void **retval)
 {
     struct proc *p;
-    int havethread,i;
+    int havethread, cmp;
 
     acquire(&ptable.lock);
     for(;;){
@@ -977,19 +970,28 @@ thread_join(thread_t thread, void **retval)
                 *retval = p->ret_val;
                 p->ret_val = 0;
                 
-                for(i = 0; i < NPROC; i++){
-                    if(p->tspace[i] == 1){
-                        p->tspace[i] = 0;
-
-                        // Remove parent's tspace also.
-                        p->parent->tspace[i] = 0;
-
-                        break;
-                    }
-                }
-
                 // Deallocate user stack.
-                deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
+                cmp = deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
+                ///// Memory compaction
+                /*
+  uint i, pa, n;
+  pte_t *pte;
+
+  if((uint) addr % PGSIZE != 0)
+    panic("loaduvm: addr must be page aligned");
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
+      panic("loaduvm: address should exist");
+    pa = PTE_ADDR(*pte);
+    if(sz - i < PGSIZE)
+      n = sz - i;
+    else
+      n = PGSIZE;
+    if(readi(ip, P2V(pa), offset+i, n) != n)
+      return -1;
+  }
+  */
+                /////
 
                 p->sz = 0;
                 p->parent = 0;
