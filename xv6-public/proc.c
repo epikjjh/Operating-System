@@ -154,9 +154,6 @@ userinit(void)
   inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
   p->sz = PGSIZE;
 
-  // Initialize standard
-  p->std = p->sz;
-
   memset(p->tf, 0, sizeof(*p->tf));
   p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
   p->tf->ds = (SEG_UDATA << 3) | DPL_USER;
@@ -253,72 +250,110 @@ exit(void)
   struct proc *p;
   int fd;
 
-  if(proc == initproc)
-    panic("init exiting");
-
-  // Close all open files.
-  for(fd = 0; fd < NOFILE; fd++){
-    if(proc->ofile[fd]){
-      fileclose(proc->ofile[fd]);
-      proc->ofile[fd] = 0;
-    }
+  // When thread calls exit().
+  if(proc->tid > 0){
+    proc = proc->parent;
+    exit();
   }
 
-  begin_op();
-  iput(proc->cwd);
-  end_op();
-  proc->cwd = 0;
+  // When process calls exit().
+  else{
+    if(proc == initproc)
+        panic("init exiting");
 
-  acquire(&ptable.lock);
+    // Close all open files.
+    for(fd = 0; fd < NOFILE; fd++){
+        if(proc->ofile[fd]){
+            fileclose(proc->ofile[fd]);
+            proc->ofile[fd] = 0;
+        }
+    }
 
-  // Parent might be sleeping in wait().
-  wakeup1(proc->parent);
+    begin_op();
+    iput(proc->cwd);
+    end_op();
+    proc->cwd = 0;
 
-  // Pass abandoned children to init.
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->parent == proc){
-      p->parent = initproc;
+    // Terminate all threads that process has.
+    acquire(&ptable.lock);
+    for(p = ptable.proc; p< &ptable.proc[NPROC]; p++){
+        if(p->parent == proc && p->tid > 0){
+            // Deallocate kerenl stack.
+            kfree(p->kstack);
+            p->kstack = 0;
+            p->pid = 0;
+            p->tid = 0;
 
-      /* Adjust abandoned children's attributes. */
-      if(p->tickets > 0){
-        total_tickets -= p->tickets;
-        // Change total tickets.
+            for(fd = 0; fd < NPROC; fd++){
+                if(p->tspace[fd] == 1){
+                    p->tspace[fd] = 0;
+                    p->parent->tspace[fd] = 0;
+                    break;
+                }
+            }
+
+            deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
+            p->sz = 0;
+            p->parent = 0;
+            p->name[0] = 0;
+            p->killed = 0;        
+            p->state = UNUSED;
+        }
         
+    }
+    release(&ptable.lock);
+
+    acquire(&ptable.lock);
+
+    // Parent might be sleeping in wait().
+    wakeup1(proc->parent);
+
+    // Pass abandoned children to init.
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->parent == proc && p->tid < 0){
+            p->parent = initproc;
+
+            /* Adjust abandoned children's attributes. */
+            if(p->tickets > 0){
+                total_tickets -= p->tickets;
+                // Change total tickets.
+        
+                proc->tickets = 0;
+                proc->stride = 0;
+                proc->pass_value = 0;
+
+                /* Total tickets has been changed, so call stride_realloc(). */
+                if(total_tickets > 0){
+                    stride_realloc();
+                }
+            }
+
+        if(p->state == ZOMBIE)
+            wakeup1(initproc);
+        }
+    }
+
+    // Jump into the scheduler, never to return.
+    proc->state = ZOMBIE;
+
+    /* Adjust current process'(This will be terminated) attributes. */
+    if(proc->tickets > 0){
+        total_tickets -= proc->tickets;
+        // Change total tickets.
+
         proc->tickets = 0;
         proc->stride = 0;
         proc->pass_value = 0;
 
         /* Total tickets has been changed, so call stride_realloc(). */
         if(total_tickets > 0){
-          stride_realloc();
-        }
-      }
-
-      if(p->state == ZOMBIE)
-        wakeup1(initproc);
+            stride_realloc();
+        }   
     }
+
+    sched();
+    panic("zombie exit");
   }
-
-  // Jump into the scheduler, never to return.
-  proc->state = ZOMBIE;
-
-  /* Adjust current process'(This will be terminated) attributes. */
-  if(proc->tickets > 0){
-    total_tickets -= proc->tickets;
-    // Change total tickets.
-
-    proc->tickets = 0;
-    proc->stride = 0;
-    proc->pass_value = 0;
-
-    /* Total tickets has been changed, so call stride_realloc(). */
-    if(total_tickets > 0){
-      stride_realloc();
-    }
-  }
-
-  sched();
-  panic("zombie exit");
 }
 
 // Wait for a child process to exit and return its pid.
@@ -909,26 +944,13 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 void
 thread_exit(void *retval)
 {
-    int fd;
+//    int fd;
 
     // Save current thread's return value
     proc->ret_val = retval;
 
     if(proc == initproc)
         panic("init exiting");
-
-    // Close all open files.
-    for(fd = 0; fd < NOFILE; fd++){
-        if(proc->ofile[fd]){
-            fileclose(proc->ofile[fd]);
-            proc->ofile[fd] = 0;
-        }
-    } 
-
-    begin_op();
-    iput(proc->cwd);
-    end_op();
-    proc->cwd = 0;
 
     acquire(&ptable.lock);
 
