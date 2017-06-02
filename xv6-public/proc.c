@@ -133,7 +133,7 @@ found:
   p->pass_value = 0;
   
   // Initialize tspace.
-  for(i = 0; i < NPROC; i++){
+  for(i = 0; i < 10; i++){
         p->tspace[i] = 0;      
   }
 
@@ -184,15 +184,29 @@ growproc(int n)
 {
   uint sz;
 
-  sz = proc->sz;
-  if(n > 0){
-    if((sz = allocuvm(proc->pgdir, sz, sz + n)) == 0)
-      return -1;
-  } else if(n < 0){
-    if((sz = deallocuvm(proc->pgdir, sz, sz + n)) == 0)
-      return -1;
+  // Thread calls growproc
+  if(proc->tid > 0){
+    sz = proc->parent->sz;
+    if(n > 0){
+        if((sz = allocuvm(proc->pgdir, sz, sz + n)) == 0)
+            return -1;
+    } else if(n < 0){
+        if((sz = deallocuvm(proc->pgdir, sz, sz + n)) == 0)
+            return -1;
+    }
+    proc->parent->sz = sz;
   }
-  proc->sz = sz;
+  else{
+    sz = proc->sz;
+    if(n > 0){
+        if((sz = allocuvm(proc->pgdir, sz, sz + n)) == 0)
+            return -1;
+    } else if(n < 0){
+        if((sz = deallocuvm(proc->pgdir, sz, sz + n)) == 0)
+            return -1;
+    }
+    proc->sz = sz;
+  }
   switchuvm(proc);
   return 0;
 }
@@ -211,15 +225,30 @@ fork(void)
     return -1;
   }
 
-  // Copy process state from p.
-  if((np->pgdir = copyuvm(proc->pgdir, proc->sz)) == 0){
-    kfree(np->kstack);
-    np->kstack = 0;
-    np->state = UNUSED;
-    return -1;
+  // When thread calls fork
+  if(proc->tid > 0){
+    // Copy process state from p.
+    if((np->pgdir = copyuvm(proc->pgdir, proc->parent->sz)) == 0){
+        kfree(np->kstack);
+        np->kstack = 0;
+        np->state = UNUSED;
+        return -1;
+    } 
+    np->std = proc->parent->std;
+    np->sz = proc->parent->sz;
   }
-  np->std = proc->std;
-  np->sz = proc->sz;
+  // When process calls fork
+  else{
+    // Copy process state from p.
+    if((np->pgdir = copyuvm(proc->pgdir, proc->sz)) == 0){
+        kfree(np->kstack);
+        np->kstack = 0;
+        np->state = UNUSED;
+        return -1;
+    }
+    np->std = proc->std;
+    np->sz = proc->sz;
+  }
   np->parent = proc;
   *np->tf = *proc->tf;
 
@@ -250,59 +279,41 @@ exit(void)
   struct proc *p;
   int fd;
 
-  // When thread calls exit().
-  if(proc->tid > 0){
-    proc = proc->parent;
-    exit();
+  if(proc->parent == initproc)
+    panic("init exiting");
+
+  // Close all open files.
+  for(fd = 0; fd < NOFILE; fd++){
+    if(proc->ofile[fd]){
+        fileclose(proc->ofile[fd]);
+        proc->ofile[fd] = 0;
+    }
   }
 
+  begin_op();
+  iput(proc->cwd);
+  end_op();
+  proc->cwd = 0;
+
+  // When thread calls exit().
+  if(proc->tid > 0){
+    // Kill thread's parent(Process)
+    kill(proc->parent->pid);
+    acquire(&ptable.lock);
+    // Pass abandoned children to init.
+    // Change all threads' state that process has.
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->parent == proc && p->tid < 0){
+            p->parent = initproc;
+        if(p->state == ZOMBIE)
+            wakeup1(initproc);
+        }
+    }
+    // Jump into the scheduler, never to return.
+    proc->state = ZOMBIE;
+  }
   // When process calls exit().
   else{
-    if(proc == initproc)
-        panic("init exiting");
-
-    // Close all open files.
-    for(fd = 0; fd < NOFILE; fd++){
-        if(proc->ofile[fd]){
-            fileclose(proc->ofile[fd]);
-            proc->ofile[fd] = 0;
-        }
-    }
-
-    begin_op();
-    iput(proc->cwd);
-    end_op();
-    proc->cwd = 0;
-
-    // Terminate all threads that process has.
-    acquire(&ptable.lock);
-    for(p = ptable.proc; p< &ptable.proc[NPROC]; p++){
-        if(p->parent == proc && p->tid > 0){
-            // Deallocate kerenl stack.
-            kfree(p->kstack);
-            p->kstack = 0;
-            p->pid = 0;
-            p->tid = 0;
-
-            for(fd = 0; fd < NPROC; fd++){
-                if(p->tspace[fd] == 1){
-                    p->tspace[fd] = 0;
-                    p->parent->tspace[fd] = 0;
-                    break;
-                }
-            }
-
-            deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
-            p->sz = 0;
-            p->parent = 0;
-            p->name[0] = 0;
-            p->killed = 0;        
-            p->state = UNUSED;
-        }
-        
-    }
-    release(&ptable.lock);
-
     acquire(&ptable.lock);
 
     // Parent might be sleeping in wait().
@@ -310,50 +321,36 @@ exit(void)
 
     // Pass abandoned children to init.
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->parent == proc && p->tid > 0){
+            p->state = ZOMBIE;
+        }
         if(p->parent == proc && p->tid < 0){
             p->parent = initproc;
-
-            /* Adjust abandoned children's attributes. */
-            if(p->tickets > 0){
-                total_tickets -= p->tickets;
-                // Change total tickets.
-        
-                proc->tickets = 0;
-                proc->stride = 0;
-                proc->pass_value = 0;
-
-                /* Total tickets has been changed, so call stride_realloc(). */
-                if(total_tickets > 0){
-                    stride_realloc();
-                }
-            }
-
-        if(p->state == ZOMBIE)
-            wakeup1(initproc);
+            if(p->state == ZOMBIE)
+                wakeup1(initproc);
         }
     }
-
     // Jump into the scheduler, never to return.
     proc->state = ZOMBIE;
-
-    /* Adjust current process'(This will be terminated) attributes. */
-    if(proc->tickets > 0){
-        total_tickets -= proc->tickets;
-        // Change total tickets.
-
-        proc->tickets = 0;
-        proc->stride = 0;
-        proc->pass_value = 0;
-
-        /* Total tickets has been changed, so call stride_realloc(). */
-        if(total_tickets > 0){
-            stride_realloc();
-        }   
-    }
-
-    sched();
-    panic("zombie exit");
   }
+
+  /* Adjust current process'(This will be terminated) attributes. */
+  if(proc->tickets > 0){
+    total_tickets -= proc->tickets;
+    // Change total tickets.
+
+    proc->tickets = 0;
+    proc->stride = 0;
+    proc->pass_value = 0;
+
+    /* Total tickets has been changed, so call stride_realloc(). */
+    if(total_tickets > 0){
+        stride_realloc();
+    }   
+  }
+
+  sched();
+  panic("zombie exit");
 }
 
 // Wait for a child process to exit and return its pid.
@@ -362,10 +359,35 @@ int
 wait(void)
 {
   struct proc *p;
-  int havekids, pid;
+  int havekids,pid;
 
   acquire(&ptable.lock);
   for(;;){
+    /*
+    // Delete thread.
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        // Found one.
+        // Deallocate thread's user space
+        if(p->state == ZOMBIE && p->tid > 0){
+            p->tid = 0;
+            deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
+            for(i = 0; i < 10; i++){
+                if(p->tspace[i] == 1){
+                    p->tspace[i] = 0;
+                    p->parent->tspace[i] = 0;
+                    break;
+                }
+            }
+            kfree(p->kstack);
+            p->kstack = 0;
+            p->pid = 0;
+            p->parent = 0;
+            p->name[0] = 0;
+            p->killed = 0;
+            p->state = UNUSED;
+        }
+    }
+    */
     // Scan through table looking for exited children.
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
@@ -373,7 +395,6 @@ wait(void)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
-        // Found one.
         pid = p->pid;
         kfree(p->kstack);
         p->kstack = 0;
@@ -858,9 +879,6 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     }
     // Initialize thread ID.
     nt->tid = nexttid++;
-    
-    // Initialize standard. Only parent can have standard.    
-    nt->std = -1;
 
     // When thread calls thread_create. Including nested case.
     tparent = proc;
@@ -875,9 +893,8 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
 
     nt->pgdir = tparent->pgdir;
     *nt->tf = *tparent->tf;
-
-    // Copy size of process memory
-    nt->sz = tparent->sz;
+    // Initialize standard.    
+    nt->std = tparent->std;
 
     for(i = 0; i < NOFILE; i++){
         if(proc->ofile[i]){
@@ -891,7 +908,7 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     /* User stack */
 
     // Find empty space
-    for(i = 0; i < NPROC; i++){
+    for(i = 0; i < 10; i++){
         if(tparent->tspace[i] == 0){
             tparent->tspace[i] = 1;
             nt->tspace[i] = 1;
@@ -904,13 +921,14 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
         return -1;
     }
 
-    if((sp = allocuvm(tparent->pgdir, tparent->std + PGSIZE + (3 * PGSIZE) * (espace), tparent->std + PGSIZE + (3 * PGSIZE) * (espace) + 2 * PGSIZE))==0){   
+    if((sp = allocuvm(tparent->pgdir, tparent->std  + (2 * PGSIZE) * (espace), tparent->std  + (2 * PGSIZE) * (espace) + 2 * PGSIZE))==0){   
         return -1;
     }
-    clearpteu(tparent->pgdir, (char*)(tparent->std + PGSIZE + (3 * PGSIZE) * (espace)));
+    clearpteu(tparent->pgdir, (char*)(tparent->std  + (2 * PGSIZE) * (espace)));
 
-    // Reallocate sz
+    // Reallocate sz : In thread, sz means each thread's top stack loaction. In process, sz means size of whole process memory.
     nt->sz = sp;
+    nt->parent->sz = nt->parent->std + 10 * (2*PGSIZE);
 
     ustack[0] = 0xffffffff;  // fake return PC
     ustack[1] = (uint)arg;
@@ -985,7 +1003,7 @@ thread_join(thread_t thread, void **retval)
                 continue;
             havethread = 1;
             if(p->state == ZOMBIE){
-            // Found one.
+                // Found one.
                 /* Reset attributes. */
 
                 // Deallocate kernel stack.
@@ -999,7 +1017,7 @@ thread_join(thread_t thread, void **retval)
                 *retval = p->ret_val;
                 p->ret_val = 0;
                 
-                for(i = 0; i < NPROC; i++){
+                for(i = 0; i < 10; i++){
                     if(p->tspace[i] == 1){
                         p->tspace[i] = 0;
 
