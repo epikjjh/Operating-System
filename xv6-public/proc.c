@@ -871,6 +871,7 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
     if((nt = allocproc()) == 0){
         return -1;
     }
+
     // Initialize thread ID.
     nt->tid = nexttid++;
 
@@ -880,6 +881,13 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
         tparent = tparent->parent;
     }
     nt->parent = tparent;
+
+    // Allocate tickets
+    if(tparent->tickets){
+        nt->tickets = tparent->tickets;
+        nt->stride = tparent->stride;
+        nt->pass_value = tparent->pass_value;
+    }
 
     // Reallocate pid
     nt->pid = tparent->pid;
