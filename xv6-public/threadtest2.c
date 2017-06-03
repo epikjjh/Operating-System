@@ -87,7 +87,7 @@ main(int argc, char *argv[])
   int ret;
   int pid;
   //int start = 0;
-  int start = 8;
+  int start = 0;
   int end = NTEST-1;
   if (argc >= 2)
     start = atoi(argv[1]);

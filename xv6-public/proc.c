@@ -264,6 +264,7 @@ fork(void)
 
   pid = np->pid;
   acquire(&ptable.lock);
+  
   np->state = RUNNABLE;
   release(&ptable.lock);
 
@@ -297,13 +298,11 @@ exit(void)
 
   // When thread calls exit().
   if(proc->tid > 0){
-    // Kill thread's parent(Process)
-    kill(proc->parent->pid);
     acquire(&ptable.lock);
     // Pass abandoned children to init.
     // Change all threads' state that process has.
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-        if(p->parent == proc && p->tid < 0){
+        if(p->parent == proc && p->tid == -1){
             p->parent = initproc;
         if(p->state == ZOMBIE)
             wakeup1(initproc);
@@ -311,6 +310,8 @@ exit(void)
     }
     // Jump into the scheduler, never to return.
     proc->state = ZOMBIE;
+    // Kill thread's parent(Process)
+    proc->parent->killed = 1;
   }
   // When process calls exit().
   else{
@@ -322,9 +323,14 @@ exit(void)
     // Pass abandoned children to init.
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
         if(p->parent == proc && p->tid > 0){
-            p->state = ZOMBIE;
+            p->killed = 1;
+
+            if(p->state == SLEEPING){
+                p->state = RUNNABLE;
+                continue;
+            }
         }
-        if(p->parent == proc && p->tid < 0){
+        if(p->parent == proc && p->tid == -1){
             p->parent = initproc;
             if(p->state == ZOMBIE)
                 wakeup1(initproc);
@@ -363,35 +369,22 @@ wait(void)
 
   acquire(&ptable.lock);
   for(;;){
-    /*
-    // Delete thread.
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-        // Found one.
-        // Deallocate thread's user space
-        if(p->state == ZOMBIE && p->tid > 0){
-            p->tid = 0;
-            deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
-            for(i = 0; i < 10; i++){
-                if(p->tspace[i] == 1){
-                    p->tspace[i] = 0;
-                    p->parent->tspace[i] = 0;
-                    break;
-                }
-            }
-            kfree(p->kstack);
-            p->kstack = 0;
-            p->pid = 0;
-            p->parent = 0;
-            p->name[0] = 0;
-            p->killed = 0;
-            p->state = UNUSED;
-        }
-    }
-    */
     // Scan through table looking for exited children.
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->parent != proc)
+      if(p->parent->state == ZOMBIE && p->state == ZOMBIE && p->tid > 0){
+        kfree(p->kstack);
+        p->kstack = 0;
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+        p->state = UNUSED;
+      }
+    }
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      //  
+      if(p->parent != proc && p->tid > 0)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
@@ -646,13 +639,13 @@ int
 kill(int pid)
 {
   struct proc *p;
-
+  
   acquire(&ptable.lock);
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->pid == pid){
       p->killed = 1;
       // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
+    if(p->state == SLEEPING)
         p->state = RUNNABLE;
       release(&ptable.lock);
       return 0;
