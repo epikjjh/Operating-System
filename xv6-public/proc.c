@@ -299,6 +299,10 @@ exit(void)
   // When thread calls exit().
   if(proc->tid > 0){
     acquire(&ptable.lock);
+
+    // Parent might be sleeping in wait().
+    wakeup1(proc->parent);
+
     // Pass abandoned children to init.
     // Change all threads' state that process has.
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
@@ -308,8 +312,6 @@ exit(void)
             wakeup1(initproc);
         }
     }
-    // Jump into the scheduler, never to return.
-    proc->state = ZOMBIE;
     // Kill thread's parent(Process)
     proc->parent->killed = 1;
   }
@@ -336,9 +338,9 @@ exit(void)
                 wakeup1(initproc);
         }
     }
-    // Jump into the scheduler, never to return.
-    proc->state = ZOMBIE;
   }
+  // Jump into the scheduler, never to return.
+  proc->state = ZOMBIE;
 
   /* Adjust current process'(This will be terminated) attributes. */
   if(proc->tickets > 0){
@@ -383,8 +385,7 @@ wait(void)
       }
     }
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      //  
-      if(p->parent != proc && p->tid > 0)
+      if(p->parent != proc)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
@@ -641,16 +642,16 @@ kill(int pid)
   struct proc *p;
   
   acquire(&ptable.lock);
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->pid == pid){
-      p->killed = 1;
-      // Wake process from sleep if necessary.
-    if(p->state == SLEEPING)
-        p->state = RUNNABLE;
-      release(&ptable.lock);
-      return 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->pid == pid){
+            p->killed = 1;
+            // Wake process from sleep if necessary.
+            if(p->state == SLEEPING)
+                p->state = RUNNABLE;
+            release(&ptable.lock);
+            return 0;
+        }
     }
-  }
   release(&ptable.lock);
   return -1;
 }
@@ -914,10 +915,10 @@ thread_create(thread_t *thread, void *(*start_routine)(void *), void *arg)
         return -1;
     }
 
-    if((sp = allocuvm(tparent->pgdir, tparent->std  + (2 * PGSIZE) * (espace), tparent->std  + (2 * PGSIZE) * (espace) + 2 * PGSIZE))==0){   
+    if((sp = allocuvm(nt->pgdir, tparent->std  + (2 * PGSIZE) * (espace), tparent->std  + (2 * PGSIZE) * (espace) + 2 * PGSIZE))==0){   
         return -1;
     }
-    clearpteu(tparent->pgdir, (char*)(tparent->std  + (2 * PGSIZE) * (espace)));
+    clearpteu(nt->pgdir, (char*)(tparent->std  + (2 * PGSIZE) * (espace)));
 
     // Reallocate sz : In thread, sz means each thread's top stack loaction. In process, sz means size of whole process memory.
     nt->sz = sp;
@@ -1022,7 +1023,7 @@ thread_join(thread_t thread, void **retval)
                 }
 
                 // Deallocate user stack.
-                deallocuvm(p->parent->pgdir, p->sz, p->sz - 2*PGSIZE);
+                deallocuvm(p->pgdir, p->sz, p->sz - 2*PGSIZE);
 
                 p->sz = 0;
                 p->parent = 0;

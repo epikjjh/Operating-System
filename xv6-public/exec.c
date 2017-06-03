@@ -99,7 +99,8 @@ exec(char *path, char **argv)
   proc->tf->eip = elf.entry;  // main
   proc->tf->esp = sp;
   switchuvm(proc);
-  freevm(oldpgdir);
+  if(proc->tid == -1)
+    freevm(oldpgdir);
   return 0;
 
  bad:
